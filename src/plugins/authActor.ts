@@ -75,7 +75,7 @@ const authActorPlugin: FastifyPluginAsync<AuthActorPluginOpts> = async (app, opt
           request_id: (req as any).requestId ?? (req as any).id ?? null,
           code: process.env.NODE_ENV !== "production" ? failure.code : undefined,
         });
-        return
+        return reply;
       }
     };
   });
@@ -91,7 +91,7 @@ const authActorPlugin: FastifyPluginAsync<AuthActorPluginOpts> = async (app, opt
             message: "Unauthorized",
             request_id: (req as any).requestId ?? (req as any).id ?? null,
           });
-          return;
+          return reply;
         }
         req.actor = actor;
       } catch (err) {
@@ -102,7 +102,7 @@ const authActorPlugin: FastifyPluginAsync<AuthActorPluginOpts> = async (app, opt
           request_id: (req as any).requestId ?? (req as any).id ?? null,
           code: process.env.NODE_ENV !== "production" ? failure.code : undefined,
         });
-        return;
+        return reply;
       }
     };
   });

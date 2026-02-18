@@ -1,5 +1,5 @@
 // src/hashing/verifier.ts
-// Version: 1.0-hash-factory-verifier-v1 | 2026-02-17
+// Version: 1.1-hash-factory-verifier-v1 | 2026-02-17
 // Purpose:
 //   Offline verifier that recomputes a digest from material and compares to a HashEnvelopeV1.
 // API:
@@ -8,9 +8,10 @@
 //   - Uses runtime parsing for safety (untrusted inputs).
 //   - Recomputes using the same pure contract helpers.
 //   - Reports mismatch details for enterprise debugging / auditing.
+// V1.1: added helper to handle missing envelope material as a 400 error
 
 import { hashJson as contractHashJson, hashRaw as contractHashRaw } from "./contract.js";
-import { parseHashEnvelopeV1 } from "./validators.js";
+import { parseHashEnvelopeV1, HashValidationError } from "./validators.js";
 import { decodeBase64UrlStrict } from "./base64url.js";
 import crypto from "node:crypto";
 import { MAX_PAYLOAD_BYTES, MAX_FRAMED_BYTES, SHA3_512_BYTES } from "./limits.js";
@@ -54,6 +55,14 @@ function isJsonEnvelope(e: HashEnvelopeV1): e is HashEnvelopeJsonV1 {
   return e.kind === "json";
 }
 
+function missingMaterial(message: string): never {
+  // Route-safe: treat missing verification material as a 400, not an internal error.
+  throw new HashValidationError(message, {
+    code: "VERIFY_MISSING_MATERIAL",
+    statusCode: 400,
+  });
+}
+
 export function verifyEnvelope(envelope: unknown, material?: VerifyMaterial): VerifyResult {
   const env = parseHashEnvelopeV1(envelope) as HashEnvelopeV1;
   const mismatches: VerifyMismatch[] = [];
@@ -94,7 +103,7 @@ export function verifyEnvelope(envelope: unknown, material?: VerifyMaterial): Ve
     } else if (env.payload_b64url) {
       payloadBytes = decodeBase64UrlStrict(env.payload_b64url, { maxBytes: MAX_PAYLOAD_BYTES, allowEmpty: true });
     } else {
-      throw new Error("verifyEnvelope_missing_material: json requires { value } or envelope.payload_b64url");
+      missingMaterial("verifyEnvelope_missing_material: json requires { value } or envelope.payload_b64url");
     }
   }
 
@@ -104,7 +113,7 @@ export function verifyEnvelope(envelope: unknown, material?: VerifyMaterial): Ve
     } else if (env.payload_b64url) {
       payloadBytes = decodeBase64UrlStrict(env.payload_b64url, { maxBytes: MAX_PAYLOAD_BYTES, allowEmpty: true });
     } else {
-      throw new Error("verifyEnvelope_missing_material: utf8 requires { text } or envelope.payload_b64url");
+      missingMaterial("verifyEnvelope_missing_material: utf8 requires { text } or envelope.payload_b64url");
     }
   }
 
@@ -116,12 +125,12 @@ export function verifyEnvelope(envelope: unknown, material?: VerifyMaterial): Ve
     } else if (env.payload_b64url) {
       payloadBytes = decodeBase64UrlStrict(env.payload_b64url, { maxBytes: MAX_PAYLOAD_BYTES, allowEmpty: true });
     } else {
-      throw new Error("verifyEnvelope_missing_material: raw requires { bytes } or { bytes_b64url } or envelope.payload_b64url");
+      missingMaterial("verifyEnvelope_missing_material: raw requires { bytes } or { bytes_b64url } or envelope.payload_b64url");
     }
   }
 
   if (!(payloadBytes instanceof Uint8Array)) {
-    throw new Error("verifyEnvelope_internal: payloadBytes not resolved");
+    missingMaterial("verifyEnvelope_internal: payloadBytes not resolved");
   }
 
   // Recompute digest from resolved payload bytes

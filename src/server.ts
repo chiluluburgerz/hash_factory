@@ -6,12 +6,14 @@ import Fastify, {
 } from "fastify";
 import helmet, { type FastifyHelmetOptions } from "@fastify/helmet";
 import fastifyCors, { type FastifyCorsOptions } from "@fastify/cors";
+import { securityHeadersPlugin } from "./plugins/securityHeaders.js";
 import compress from "@fastify/compress";
 import { nanoid } from "nanoid";
 import { pool, healthcheck, assertAuthPrereqs, closeDb } from "./db.js";
 import authActorPlugin from "./plugins/authActor.js";
 import { requestIdPlugin } from "./plugins/requestId.js";
 import { registerGlobalRateLimit } from "./plugins/globalRateLimit.js";
+import { registerRoutes } from "./routes/index.js";
 
 type ReqWithTiming = FastifyRequest & { _reqStartNs?: bigint };
 
@@ -25,10 +27,10 @@ function toBool(v: unknown, def = false): boolean {
 function toInt(v: unknown, def: number, min?: number, max?: number): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return def;
-  const i = Math.floor(n);
-  const lo = typeof min === "number" ? Math.max(i, min) : i;
-  const hi = typeof max === "number" ? Math.min(lo, max) : lo;
-  return hi;
+  let i = Math.trunc(n);
+  if (typeof min === "number") i = Math.max(min, i);
+  if (typeof max === "number") i = Math.min(max, i);
+  return i;
 }
 
 function clampStr(v: unknown, max = 256): string | null {
@@ -159,6 +161,8 @@ async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(fastifyCors, corsOpts);
 
+  await app.register(securityHeadersPlugin);
+
   // Compression
   const compressEnabled = toBool(process.env.COMPRESS_ENABLED, true);
   if (compressEnabled) {
@@ -170,6 +174,19 @@ async function buildApp(): Promise<FastifyInstance> {
 
   // Auth plugin (API-key -> req.actor)
   await app.register(authActorPlugin, { pool });
+
+  // System default: require auth for all routes except liveness/readiness.
+  // This establishes a stable boundary for future quotas/subscriptions/auditing.
+  const requireAuthMw = app.requireAuth();
+const AUTH_BYPASS_PATHS = new Set(["/healthz", "/readyz", "/v1/health"]);
+
+  app.addHook("preHandler", async (req, reply) => {
+    // Fastify's req.url includes querystring; normalize to pathname only.
+    const url = String((req as any).url || "");
+    const path = url.split("?")[0] || url;
+    if (AUTH_BYPASS_PATHS.has(path)) return;
+    return requireAuthMw(req, reply);
+  });
 
   // Health
   app.get("/healthz", async (_req, reply) => reply.send({ ok: true }));
@@ -192,32 +209,121 @@ async function buildApp(): Promise<FastifyInstance> {
     reply.send({ ok: true });
   });
 
+  await registerRoutes(app);
+
+  function coerceStatus(n: unknown): number | null {
+    const v = Number(n);
+    return Number.isFinite(v) && v >= 400 && v <= 599 ? v : null;
+  }
+
+  function deepGet(obj: any, key: string): unknown {
+    const seen = new Set<any>();
+    let cur: any = obj;
+    while (cur && typeof cur === "object" && !seen.has(cur)) {
+      seen.add(cur);
+      if (cur[key] !== undefined) return cur[key];
+      cur = cur.cause;
+    }
+    return undefined;
+  }
+
+  function deepStatus(err: any): number | null {
+    return (
+      coerceStatus(deepGet(err, "statusCode")) ??
+      coerceStatus(deepGet(err, "status")) ??
+      coerceStatus(deepGet(err, "httpStatus")) ??
+      null
+    );
+  }
+
+  function deepCode(err: any): string | null {
+    const v = deepGet(err, "code");
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  }
+
+  function errorKeyFromStatus(status: number): "bad_request" | "unauthorized" | "forbidden" | "not_found" | "internal_error" {
+    switch (status) {
+      case 400:
+        return "bad_request";
+      case 401:
+        return "unauthorized";
+      case 403:
+        return "forbidden";
+      case 404:
+        return "not_found";
+      default:
+        return "internal_error";
+    }
+  }
+
+  function isHashValidationError(err: any): boolean {
+    return String(err?.name || "") === "HashValidationError";
+  }
+
+  function isAuthError(err: any): boolean {
+    // supports your AuthError class and any future wrappers
+    return String(err?.name || "") === "AuthError";
+  }
+
   // Not found handler
   app.setNotFoundHandler((req, reply) => {
     const reqId = (req as any).id;
     req.log.info({ reqId, route: req.url }, "not_found");
-    reply.code(404).send({ error: "not_found", message: "not_found" });
+    reply.code(404).send({ error: "not_found", message: "not_found", request_id: reqId ?? null });
   });
 
   // Central error handler
   app.setErrorHandler((err: FastifyError & { name?: string }, req, reply) => {
-    const status = (err as any).statusCode ?? 500;
     const route = req.routeOptions?.url || "unmatched";
     const reqId = (req as any).id;
 
-    const safeError =
-      status === 400 ? "bad_request" : status === 404 ? "not_found" : "internal";
+    const status =
+      deepStatus(err) ??
+      // Fastify sometimes sets .statusCode at top-level only; keep fallback
+      coerceStatus((err as any).statusCode) ??
+      500;
 
-    if (status >= 500) req.log.error({ err, reqId, route, status }, "request_error");
-    else req.log.info({ reqId, route, status, err: { message: err.message, name: err.name } }, "request_error");
+    const code = deepCode(err);
 
-    reply.code(status).send({
-      error: safeError,
-      message: status >= 500 && isProd ? "internal_error" : err.message,
-    });
+    // Message policy:
+    // - always safe for 4xx (client error, expected)
+    // - never leak details for 5xx in production
+    const safeMessage =
+      status >= 500 && isProd ? "internal_error" : String((err as any)?.message || "error");
+
+    const errorKey = errorKeyFromStatus(status);
+
+    // Log policy:
+    // - 5xx: error level
+    // - expected 4xx validation/auth: info (avoid noisy warn/error)
+    // - keep logs structured and small (do not log full err object)
+    const logBase: Record<string, unknown> = {
+      reqId,
+      route,
+      status,
+      name: (err as any)?.name ?? null,
+      message: String((err as any)?.message || ""),
+      ...(code ? { code } : {}),
+    };
+
+    if (status >= 500) req.log.error(logBase, "request_error");
+    else if (isHashValidationError(err) || status === 400) req.log.info(logBase, "request_error");
+    else if (isAuthError(err) || status === 401 || status === 403) req.log.info(logBase, "request_error");
+    else req.log.info(logBase, "request_error");
+
+    const payload: Record<string, unknown> = {
+      error: errorKey,
+      message: safeMessage,
+      request_id: reqId ?? null,
+    };
+
+    // Only expose a diagnostic code in non-production
+    if (!isProd && code) payload.code = code;
+
+    reply.code(status).send(payload);
   });
 
-  return app;
+  return app;     
 }
 
 async function main() {
