@@ -1,12 +1,13 @@
 // ============================================================================
 // File: src/routes/apiKeys.ts
-// Version: 1.0-hash-factory-api-keys-routes | 2026-02-18
+// Version: 1.1-hash-factory-api-keys-routes | 2026-02-18
 // Purpose:
 //   Fastify API key management routes for Hash Factory.
 //   - Hash Factory acts as a hardened gateway to Core API key endpoints.
 //   - Route-level DoS guards (body size, metadata size).
 //   - Minimal boundary authz checks; Core RLS remains authoritative.
 //   - Never returns key_hash; create/rotate return secret ONCE.
+// V1.1: added route-level DoS guards, metadata size limits, and boundary authz checks.
 // ============================================================================
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
@@ -121,12 +122,94 @@ function ctxFromReq(req: FastifyRequest): { requestId?: string | null; clientReq
   };
 }
 
+function extractIncomingAuthHeader(req: FastifyRequest): string | null {
+  // HF auth accepts Authorization: Bearer or x-api-key.
+  const authRaw = req.headers.authorization;
+  const xRaw = (req.headers as any)["x-api-key"];
+
+  const bearer =
+    typeof authRaw === "string" && authRaw.toLowerCase().startsWith("bearer ")
+      ? authRaw.slice("bearer ".length).trim()
+      : null;
+
+  const x = typeof xRaw === "string" ? xRaw.trim() : null;
+
+  if (bearer && x && bearer !== x) {
+    const e: any = new Error("Multiple API key headers provided");
+    e.statusCode = 400;
+    e.code = "AUTH_AMBIGUOUS";
+    throw e;
+  }
+
+  const token = bearer || x || null;
+  if (!token) return null;
+
+  // Keep bounded (matches apiKeyAuth.ts MAX_API_KEY_LEN)
+  if (token.length > 1024) {
+    const e: any = new Error("API key too long");
+    e.statusCode = 400;
+    e.code = "AUTH_INVALID";
+    throw e;
+  }
+
+  return `Bearer ${token}`;
+}
+
+function idempotencyKeyFromReq(req: FastifyRequest): string | null {
+  // Prefer standard header; accept x- prefix for flexibility.
+  const h = (req.headers as any) || {};
+  const raw = h["idempotency-key"] ?? h["x-idempotency-key"] ?? null;
+  if (raw == null) return null;
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  // Keep it bounded to avoid log/pathological header abuse.
+  return s.length > 256 ? s.slice(0, 256) : s;
+}
+
+function actorTag(actor: Actor | null | undefined): string | null {
+ if (!actor) return null;
+  const u = actor.user_id ? String(actor.user_id) : "";
+  const o = actor.org_id ? String(actor.org_id) : "";
+  const r = actor.org_role ? String(actor.org_role) : "";
+  if (!u && !o && !r) return null;
+  return `u:${u || "?"}|o:${o || "?"}|r:${r || "?"}`;
+}
+
+function coreCtx(req: FastifyRequest, actor?: Actor | null, forWrite: boolean = false, passThroughAuth: boolean = true) {
+  const base = ctxFromReq(req);
+  const hfActor = actorTag(actor);
+  const idempotencyKey = forWrite ? idempotencyKeyFromReq(req) : null;
+  const coreAuthHeader = passThroughAuth ? extractIncomingAuthHeader(req) : null;
+
+  return {
+    ...base,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(coreAuthHeader ? { coreAuthHeader } : {}),
+    ...(hfActor ? { hfActor } : {}),
+    onCoreCall: (line: any) => {
+      // One structured line per attempt; do NOT include secrets.
+      // Fastify gives req.log by default; fall back to app logger if needed.
+      const logger: any = (req as any).log ?? console;
+      logger.info(
+        {
+          event: "core_call",
+          ...line,
+        },
+        "core_call"
+      );
+    },
+  };
+}
+
 function mapCoreError(err: unknown): Error {
   if (err instanceof CoreClientError) {
     const e: any = new Error(err.message || "upstream_error");
     // Preserve 4xx/5xx semantics while remaining stable.
     e.statusCode = err.status >= 400 && err.status <= 599 ? err.status : 502;
     e.code = err.code ?? (e.statusCode >= 500 ? "UPSTREAM_ERROR" : "BAD_REQUEST");
+    if (err.requestId) e.upstream_request_id = err.requestId;
     return e;
   }
   const e: any = new Error("internal_error");
@@ -177,6 +260,17 @@ function corePath(p: string): string {
   const prefix = String(CORE_API_KEYS_PREFIX || "").trim().replace(/\/+$/, "");
   const path = String(p || "").trim().startsWith("/") ? String(p || "").trim() : `/${String(p || "").trim()}`;
   return prefix ? `${prefix}${path}` : path;
+}
+
+function buildQuery(params: Record<string, string | number | boolean | null | undefined>): string {
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === "boolean") usp.set(k, v ? "true" : "false");
+    else usp.set(k, String(v));
+  }
+  const s = usp.toString();
+  return s ? `?${s}` : "";
 }
 
 export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: FastifyInstance, opts) => {
@@ -274,7 +368,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     }
 
     try {
-      const result = await core.post(corePath("/api-keys"), out, ctxFromReq(req));
+      const result = await core.post(corePath("/api-keys"), out, coreCtx(req, actor, true, true));
       reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
@@ -287,7 +381,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
   // ---------------------------------------------------------------------------
   app.post("/api-keys/rotate", { preHandler: requireAuth }, async (req, reply) => {
     if (!enforce(limWrite, rlKey(req, "api-keys:rotate"), req, reply)) return reply;
-    requireActor(req);
+    const actor = requireActor(req);
     const body = requireBodyObject(req);
 
     const oldId = (body as any).old_api_key_id;
@@ -299,7 +393,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     }
 
     try {
-      const result = await core.post(corePath("/api-keys/rotate"), body, ctxFromReq(req));
+      const result = await core.post(corePath("/api-keys/rotate"), body, coreCtx(req, actor, true, true));
       reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
@@ -315,14 +409,15 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
   // ---------------------------------------------------------------------------
   app.get("/api-keys/my", { preHandler: requireAuth }, async (req, reply) => {
     if (!enforce(limRead, rlKey(req, "api-keys:my"), req, reply)) return reply;
-    requireActor(req);
+    const actor = requireActor(req);
     const limit = clampInt((req.query as any)?.limit, 1, 1000, 50);
     const offset = clampInt((req.query as any)?.offset, 0, 10_000_000, 0);
     const includeDisabledRaw = (req.query as any)?.includeDisabled;
     const includeDisabled = includeDisabledRaw == null ? true : String(includeDisabledRaw).trim() !== "false";
 
     try {
-      const result = await core.post(corePath("/api-keys/my"), { limit, offset, includeDisabled }, ctxFromReq(req));
+      const qp = buildQuery({ limit, offset, includeDisabled });
+      const result = await core.get(corePath(`/api-keys/my${qp}`), coreCtx(req, actor, false, true));
       reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
@@ -347,7 +442,8 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     }
 
     try {
-      const result = await core.post(corePath("/api-keys/org"), { limit, offset, status, user_id: userId }, ctxFromReq(req));
+      const qp = buildQuery({ limit, offset, status, user_id: userId });
+      const result = await core.get(corePath(`/api-keys/org${qp}`), coreCtx(req, actor, false, true));
       reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
@@ -372,11 +468,8 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     const status = (req.query as any)?.status == null ? null : String((req.query as any).status).trim() || null;
 
     try {
-      const result = await core.post(
-        corePath(`/api-keys/user/${encodeURIComponent(targetUserId)}`),
-        { limit, offset, status },
-        ctxFromReq(req)
-      );
+      const qp = buildQuery({ limit, offset, status });
+      const result = await core.get(corePath(`/api-keys/user/${encodeURIComponent(targetUserId)}${qp}`), coreCtx(req, actor, false, true));
       reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
@@ -385,7 +478,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
 
   app.get("/api-keys/:id", { preHandler: requireAuth }, async (req, reply) => {
     if (!enforce(limRead, rlKey(req, "api-keys:get"), req, reply)) return reply;
-    requireActor(req);
+    const actor = requireActor(req);
     const id = String((req.params as any)?.id ?? "").trim();
     if (!isUuid(id)) {
       const e: any = new Error("invalid_id");
@@ -398,7 +491,8 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     const includeDeleted = includeDeletedRaw == null ? false : String(includeDeletedRaw).trim() === "true";
 
     try {
-      const result = await core.post(corePath(`/api-keys/${encodeURIComponent(id)}`), { includeDeleted }, ctxFromReq(req));
+      const qp = buildQuery({ includeDeleted });
+      const result = await core.get(corePath(`/api-keys/${encodeURIComponent(id)}${qp}`), coreCtx(req, actor, false, true));
       reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
@@ -410,7 +504,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
   // ---------------------------------------------------------------------------
   async function postWithId(req: FastifyRequest, reply: any, suffix: string, extraBody?: Record<string, unknown>) {
     if (!enforce(limWrite, rlKey(req, `api-keys:${suffix}`), req, reply)) return;
-    requireActor(req);
+    const actor = requireActor(req);
     const id = String((req.params as any)?.id ?? "").trim();
     if (!isUuid(id)) {
       const e: any = new Error("invalid_id");
@@ -421,7 +515,11 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
 
     const body = extraBody ?? (req.method === "POST" ? requireBodyObject(req) : {});
     try {
-      const result = await core.post(corePath(`/api-keys/${encodeURIComponent(id)}/${suffix}`), body, ctxFromReq(req));
+      const result = await core.post(
+        corePath(`/api-keys/${encodeURIComponent(id)}/${suffix}`),
+        body,
+        coreCtx(req, actor, true, true)
+      );
       reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);

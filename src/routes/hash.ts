@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/routes/hash.ts
-// Version: 1.0-routes-hash-v1 | 2026-02-17
+// Version: 1.1-routes-hash-v1 | 2026-02-17
 // Purpose:
 //   Hash Factory public API routes.
 // Routes:
@@ -11,6 +11,7 @@
 //   - Deterministic outputs, strict request validation, no-store responses.
 //   - Auth required (defense-in-depth even though server.ts also requires auth).
 //   - Adds per-route strict rate limits (globalRateLimit remains as soft backstop).
+// V1.1: added defense-in-depth body size checks and content-type checks to hash/verify routes
 // ============================================================================
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -41,6 +42,36 @@ type VerifyRequestBody = Readonly<{
   envelope: unknown;
   material?: unknown;
 }>;
+
+// Route-level body bounds (defense-in-depth vs server bodyLimit)
+const DEFAULT_MAX_HASH_ROUTE_BODY_BYTES = 256_000; // hash/verify may include JSON; keep bounded
+
+function toInt(v: unknown, def: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : def;
+}
+
+function maxHashRouteBodyBytes(): number {
+  const raw = process.env.HASH_ROUTE_BODY_MAX_BYTES ?? process.env.HTTP_ROUTE_BODY_MAX_BYTES ?? null;
+  if (raw == null || raw === "") return DEFAULT_MAX_HASH_ROUTE_BODY_BYTES;
+  const v = toInt(raw, DEFAULT_MAX_HASH_ROUTE_BODY_BYTES);
+  return Math.max(256, Math.min(2_000_000, v));
+}
+
+function requireBodyBytesBounded(req: FastifyRequest): void {
+  const lim = maxHashRouteBodyBytes();
+  const clRaw = (req.headers as any)?.["content-length"];
+  const clStr = Array.isArray(clRaw) ? clRaw[0] : clRaw;
+  if (typeof clStr === "string" && clStr.trim()) {
+    const n = Number(clStr);
+    if (Number.isFinite(n) && n > lim) {
+      const e: any = new Error("payload_too_large");
+      e.statusCode = 413;
+      e.code = "PAYLOAD_TOO_LARGE";
+      throw e;
+    }
+  }
+}
 
 function requireJson(req: FastifyRequest): void {
   const ct = String((req.headers as any)?.["content-type"] ?? "").toLowerCase();
@@ -100,6 +131,15 @@ function parseVerifyMaterial(x: unknown): VerifyMaterial | undefined {
   }
   return { bytes_b64url: String(v.bytes_b64url) } as VerifyMaterial;
 }
+
+// Hoist schemas (avoid per-request allocation)
+const VerifyBodySchema = z
+  .object({
+    envelope: z.unknown(),
+    material: z.unknown().optional(),
+  })
+  .strict();
+
 
 export async function hashRoutes(app: FastifyInstance) {
   // Auth required
@@ -173,6 +213,7 @@ export async function hashRoutes(app: FastifyInstance) {
   app.post("/v1/hash", { preHandler: requireAuth }, async (req: FastifyRequest, reply) => {
     sendNoStore(reply);
     requireJson(req);
+    requireBodyBytesBounded(req);
     if (!enforce(limHash, rlKey(req, "hash"), req, reply)) return reply;
 
     try {
@@ -226,16 +267,10 @@ export async function hashRoutes(app: FastifyInstance) {
   app.post("/v1/verify", { preHandler: requireAuth }, async (req: FastifyRequest, reply) => {
     sendNoStore(reply);
     requireJson(req);
+    requireBodyBytesBounded(req);
     if (!enforce(limVerify, rlKey(req, "verify"), req, reply)) return reply;
 
     try {
-      const VerifyBodySchema = z
-        .object({
-          envelope: z.unknown(),
-          material: z.unknown().optional(),
-        })
-        .strict();
-
       const parsedBody = parseOr400(reply, VerifyBodySchema, (req as any).body);
       if (!parsedBody.ok) return reply;
 

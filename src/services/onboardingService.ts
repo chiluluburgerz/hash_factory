@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/services/onboardingService.ts
-// Version: 1.0-hash-factory-onboarding-service | 2026-02-18
+// Version: 1.1-hash-factory-onboarding-service | 2026-02-18
 // Purpose:
 //   Hash Factory OnboardingService (proxy + guard layer) -> Core Backend.
 //   - Performs strict runtime validation and DoS guards at the boundary
@@ -11,6 +11,7 @@
 // Notes:
 //   - Core remains the source of truth (RLS + constraints).
 //   - This service is a hardened façade and a stable contract for Hash Factory.
+// V1.1: Added assorted limits, guards, defense-in-depth improvements.
 // ============================================================================
 
 import type { FastifyRequest } from "fastify";
@@ -28,6 +29,17 @@ export type Actor = Readonly<{
 export type RequestCtx = Readonly<{
   requestId?: string | null;
   clientRequestId?: string | null;
+  idempotencyKey?: string | null;
+  hfActor?: string | null;
+  onCoreCall?: (line: {
+    hf_req_id: string | null;
+    hf_actor: string | null;
+    core_path: string;
+    core_method: string;
+    core_status: number;
+    core_request_id: string | null;
+    attempt: number;
+  }) => void;
 }>;
 
 export type OnboardingServiceOpts = Readonly<{
@@ -188,6 +200,26 @@ function ctxFromReq(req: FastifyRequest): RequestCtx {
   };
 }
 
+function idempotencyKeyFromReq(req: FastifyRequest): string | null {
+  const h = (req.headers as any) || {};
+  const raw = h["idempotency-key"] ?? h["x-idempotency-key"] ?? null;
+  if (raw == null) return null;
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.length > 256 ? s.slice(0, 256) : s;
+}
+
+function actorTag(actor: Actor | null | undefined): string | null {
+  if (!actor) return null;
+  const u = actor.user_id ? String(actor.user_id) : "";
+  const o = actor.org_id ? String(actor.org_id) : "";
+  const r = actor.org_role ? String(actor.org_role) : "";
+  if (!u && !o && !r) return null;
+  return `u:${u || "?"}|o:${o || "?"}|r:${r || "?"}`;
+}
+
 // ----------------------------------------------------------------------------
 // Public Types
 // ----------------------------------------------------------------------------
@@ -317,8 +349,20 @@ export class OnboardingService {
   }
 
   // Convenience: call from routes
-  ctxFromReq(req: FastifyRequest): RequestCtx {
-    return ctxFromReq(req);
+  ctxFromReq(req: FastifyRequest, actor?: Actor | null, forWrite: boolean = false): RequestCtx {
+    const base = ctxFromReq(req);
+    const hfActor = actorTag(actor);
+    const idempotencyKey = forWrite ? idempotencyKeyFromReq(req) : null;
+
+    return {
+      ...base,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+     ...(hfActor ? { hfActor } : {}),
+      onCoreCall: (line) => {
+        const logger: any = (req as any).log ?? console;
+        logger.info({ event: "core_call", ...line }, "core_call");
+      },
+    };
   }
 
   #mapCoreError(err: unknown): Error {
