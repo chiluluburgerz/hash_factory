@@ -352,10 +352,16 @@ async function main() {
   app.log.info({ port, host }, "Hash Factory started");
 }
 
-main().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error(err);
-  process.exit(1);
-});
+const RUN_MAIN =
+  String(process.env.RUN_MAIN ?? "").trim() === "1" ||
+  (process.argv[1] && /server\.(ts|js|mjs)$/i.test(process.argv[1]));
+
+if (RUN_MAIN) {
+  main().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(err);
+    process.exit(1);
+  });
+}
 
 export { buildApp };

@@ -115,8 +115,8 @@ export function createApiKeyAuthenticator(opts: ApiKeyAuthenticatorOpts) {
   async function maybeTouchLastUsed(api_key_id: string) {
     if (!touchLastUsed) return;
     const now = Date.now();
-    const last = lastTouchByKeyId.get(api_key_id) ?? 0;
-    if (now - last < touchMinIntervalMs) return;
+    const last = lastTouchByKeyId.get(api_key_id);
+    if (last != null && now - last < touchMinIntervalMs) return;
 
     const rate = Number(touchSampleRate);
     const doTouch = Number.isFinite(rate) ? Math.random() < rate : false;

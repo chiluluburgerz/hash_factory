@@ -113,11 +113,14 @@ export async function healthcheck(): Promise<boolean> {
  * Auth prereq check: ensures core.api_keys exists.
  */
 export async function assertAuthPrereqs(): Promise<void> {
-  const r = await pool.query<{ ok: boolean }>(
-    "SELECT to_regproc('core.api_keys_lookup') IS NOT NULL AS ok"
-  );
+  const r = await pool.query<{ ok: boolean; has_table: boolean }>(`
+    SELECT
+      to_regprocedure('core.api_key_lookup(text)') IS NOT NULL AS ok,
+      to_regclass('core.api_keys') IS NOT NULL AS has_table
+  `);
+
   if (!r.rows?.[0]?.ok) {
-    throw new Error("db_missing_prereq: core.api_keys not found");
+    throw new Error("db_missing_prereq: core.api_key_lookup(text) not found");
   }
 }
 

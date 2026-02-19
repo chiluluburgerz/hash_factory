@@ -21,8 +21,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // ---------------------------------------------------------------------------
   // Core gateway clients/services
   // ---------------------------------------------------------------------------
-  const coreBaseUrl = String(process.env.CORE_BASE_URL || "").trim();
-  if (!coreBaseUrl) throw new Error("CORE_BASE_URL is required to register core gateway routes");
+  const coreBaseUrl = String(process.env.CORE_BACKEND_URL || "").trim();
+  if (!coreBaseUrl) throw new Error("CORE_BACKEND_URL is required to register core gateway routes");
 
   const coreServiceApiKey = String(process.env.CORE_SERVICE_API_KEY || "").trim();
   if (!coreServiceApiKey) throw new Error("CORE_SERVICE_API_KEY is required to register core gateway routes");
