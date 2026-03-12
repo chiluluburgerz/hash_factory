@@ -64,6 +64,14 @@ function buildInfo(alg: HashAlg, encoding: DigestEncoding): HashContractInfo {
   });
 }
 
+export const HF_HASH_CONTRACT_INFO = Object.freeze({
+  contract_id: "hf-contract-v1",
+  frame: "hf:frame:v1",
+  canonical_json: "hf:canonical-json:v1",
+  algorithm: "sha3-512",
+  encoding: "hex_lower",
+} as const);
+
 /**
  * Hash raw bytes under a domain:
  *   digest = H( frame(domain, bytes) )
@@ -128,3 +136,4 @@ export function hashJsonDigest(opts: HashJsonOpts): string {
 export function hashRawDigest(opts: HashRawOpts): string {
   return hashRaw(opts).digest;
 }
+

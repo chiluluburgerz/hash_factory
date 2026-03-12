@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/core/coreClient.ts
-// Version: 1.1-hash-factory-core-client | 2026-02-18
+// Version: 1.2-hash-factory-core-client | 2026-03-05
 // Purpose:
 //   Minimal, disciplined HTTP client for Hash Factory -> Core Backend.
 //   - Service-to-service auth via CORE_SERVICE_API_KEY
@@ -19,10 +19,33 @@ export type CoreClientOpts = {
   baseUrl: string;
   apiKey: string;
   timeoutMs?: number;
-  connectTimeoutMs?: number;
   maxResponseBytes?: number;
   maxRetries?: number;
 };
+
+export type CoreCallLogLine = Readonly<{
+  hf_req_id: string | null;
+  hf_actor: string | null;
+  core_path: string;
+  core_method: string;
+  core_status: number;
+  core_request_id: string | null;
+  attempt: number;
+}>;
+
+export type CoreRequestCtx = Readonly<{
+  requestId?: string | null;
+  clientRequestId?: string | null;
+  idempotencyKey?: string | null;
+  coreAuthHeader?: string | null;
+  coreApiKey?: string | null;
+
+  // Optional per-request timeout overrides (ms). Use only for known slow endpoints.
+  timeoutMs?: number | null;
+
+  onCoreCall?: (line: CoreCallLogLine) => void;
+  hfActor?: string | null;
+}>;
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
@@ -111,7 +134,6 @@ export class CoreClient {
   private baseUrl: string;
   private apiKey: string;
   private timeoutMs: number;
-  private connectTimeoutMs: number;
   private maxResponseBytes: number;
   private maxRetries: number;
 
@@ -122,38 +144,22 @@ export class CoreClient {
     this.baseUrl = String(opts.baseUrl);
     this.apiKey = String(opts.apiKey).trim();
     this.timeoutMs = Math.max(500, Number(opts.timeoutMs ?? 10_000));
-    this.connectTimeoutMs = Math.max(250, Number(opts.connectTimeoutMs ?? 2_500));
     this.maxResponseBytes = Math.max(1024, Math.min(Number(opts.maxResponseBytes ?? 256_000), 10_000_000));
     this.maxRetries = Math.max(0, Math.min(Number(opts.maxRetries ?? 0), 5));
+  }
+
+  private effectiveTimeoutMs(ctx?: CoreRequestCtx): number {
+    const raw = ctx?.timeoutMs;
+    if (raw == null) return this.timeoutMs;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.max(500, Math.trunc(n)) : this.timeoutMs;
   }
 
   private async _request<T = any>(args: {
     method: "GET" | "POST" | "HEAD";
     path: string;
     body?: Json | null;
-    ctx?: {
-      requestId?: string | null;
-      clientRequestId?: string | null;
-      idempotencyKey?: string | null;
-      // Override auth per request (used for user pass-through). If set, replaces service key.
-      // Provide either:
-      //   - coreAuthHeader: full value, e.g. "Bearer <token>"
-      //   - coreApiKey: secret only; will be used as "Bearer <coreApiKey>"
-      coreAuthHeader?: string | null;
-      coreApiKey?: string | null;
-      // If provided, this gets called exactly once per attempt (success or error).
-      // Use it in HF routes to emit the single “core_call” structured line.
-      onCoreCall?: (line: {
-        hf_req_id: string | null;
-        hf_actor: string | null;
-        core_path: string;
-        core_method: string;
-        core_status: number;
-        core_request_id: string | null;
-        attempt: number;
-      }) => void;
-      hfActor?: string | null; // for logging only
-    } | undefined;
+    ctx?: CoreRequestCtx | undefined;
     // Retries only for GET/HEAD, or POST when idempotencyKey is present.
     retry?: { maxRetries?: number } | null | undefined;
   }): Promise<T> {
@@ -174,9 +180,8 @@ export class CoreClient {
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       const controller = new AbortController();
-      const tTotal: TimeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
-      // “Connect timeout” approximation: abort if we can't even get headers quickly.
-      const tConnect: TimeoutHandle = setTimeout(() => controller.abort(), this.connectTimeoutMs);
+      const timeoutMs = this.effectiveTimeoutMs(args.ctx);
+      const tTotal: TimeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
         // Auth selection:
@@ -209,10 +214,6 @@ export class CoreClient {
         }
 
         const res: AnyResponse = await fetch(url, init);
-
-        // If we got a response, we consider “connect” satisfied.
-        clearTimeout(tConnect);
-
         const payload = await readJsonSafe(res, this.maxResponseBytes);
         const coreReqId =
           (payload && typeof payload === "object" && (payload as any).request_id) ||
@@ -240,7 +241,6 @@ export class CoreClient {
 
         return payload as T;
       } catch (e: any) {
-        clearTimeout(tConnect);
         lastErr = e;
 
         // Normalize timeouts/unreachable into stable errors
@@ -296,20 +296,7 @@ export class CoreClient {
 
   async get<T = any>(
     path: string,
-    ctx?: {
-      requestId?: string | null;
-      clientRequestId?: string | null;
-      onCoreCall?: (line: {
-        hf_req_id: string | null;
-        hf_actor: string | null;
-        core_path: string;
-        core_method: string;
-        core_status: number;
-        core_request_id: string | null;
-        attempt: number;
-      }) => void;
-      hfActor?: string | null;
-    },
+    ctx?: CoreRequestCtx,
     retry?: { maxRetries?: number } | null
   ): Promise<T> {
     const args: any = { method: "GET", path };
@@ -350,20 +337,7 @@ export function makeCoreOnboarding(core: CoreClient) {
   return {
     checkEmail: (
       email: string,
-      ctx?: {
-        requestId?: string | null;
-        clientRequestId?: string | null;
-        onCoreCall?: (line: {
-          hf_req_id: string | null;
-          hf_actor: string | null;
-          core_path: string;
-          core_method: string;
-          core_status: number;
-          core_request_id: string | null;
-          attempt: number;
-        }) => void;
-        hfActor?: string | null;
-      }
+      ctx?: CoreRequestCtx,
     ) => core.post("/v1/onboarding/email/check", { email }, ctx),
 
     createOrg: (

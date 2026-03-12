@@ -63,46 +63,45 @@ const authActorPlugin: FastifyPluginAsync<AuthActorPluginOpts> = async (app, opt
   app.decorateRequest("actor", undefined);
 
   app.decorate("optionalAuth", () => {
-    return async (req: FastifyRequest, reply: any) => {
+    return async (req: FastifyRequest, reply: FastifyReply) => {
       try {
         const actor = await buildActorFromRequest(req);
         if (actor) req.actor = actor;
+        return;
       } catch (err) {
         const failure = safeAuthFailure(err);
-        reply.code(failure.statusCode).send({
+        return reply.code(failure.statusCode).send({
           error: "unauthorized",
           message: failure.message,
           request_id: (req as any).requestId ?? (req as any).id ?? null,
           code: process.env.NODE_ENV !== "production" ? failure.code : undefined,
         });
-        return reply;
       }
     };
   });
 
   // Must have a valid key and actor
   app.decorate("requireAuth", () => {
-    return async (req: FastifyRequest, reply: any) => {
+    return async (req: FastifyRequest, reply: FastifyReply) => {
       try {
         const actor = await buildActorFromRequest(req);
         if (!actor) {
-          reply.code(401).send({
+          return reply.code(401).send({
             error: "unauthorized",
             message: "Unauthorized",
             request_id: (req as any).requestId ?? (req as any).id ?? null,
           });
-          return reply;
         }
         req.actor = actor;
+        return;
       } catch (err) {
         const failure = safeAuthFailure(err);
-        reply.code(failure.statusCode).send({
+        return reply.code(failure.statusCode).send({
           error: "unauthorized",
           message: failure.message,
           request_id: (req as any).requestId ?? (req as any).id ?? null,
           code: process.env.NODE_ENV !== "production" ? failure.code : undefined,
         });
-        return reply;
       }
     };
   });

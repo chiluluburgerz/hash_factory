@@ -1,4 +1,5 @@
 // src/server.ts
+import "dotenv/config";
 import Fastify, {
   type FastifyError,
   type FastifyInstance,
@@ -86,6 +87,9 @@ async function buildApp(): Promise<FastifyInstance> {
     trustProxy,
     genReqId: () => nanoid(),
     requestIdHeader: false,
+    routerOptions: {
+      maxParamLength: 255,
+    },
   });
 
   // Request id + client request id (binds req.log child logger)
@@ -211,6 +215,7 @@ const AUTH_BYPASS_PATHS = new Set(["/healthz", "/readyz", "/v1/health"]);
 
   await registerRoutes(app);
 
+  
   function coerceStatus(n: unknown): number | null {
     const v = Number(n);
     return Number.isFinite(v) && v >= 400 && v <= 599 ? v : null;
