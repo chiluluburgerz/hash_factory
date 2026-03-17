@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/core/datasetsClient.ts
-// Version: 1.0-hash-factory-datasets-client | 2026-03-04
+// Version: 1.1-hash-factory-datasets-client | 2026-03-04
 // Purpose:
 //   Hash Factory -> Core "Dataset Registry" client.
 //   - Default auth: service key via CoreClient (CORE_SERVICE_API_KEY)
@@ -119,6 +119,19 @@ function buildQueryString(q: Record<string, string | number | boolean | null | u
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
+function readUpstreamMessage(err: CoreClientError): string | null {
+  const payloadMsg =
+    typeof (err as any)?.payload?.message === "string"
+      ? String((err as any).payload.message).trim()
+      : "";
+  if (payloadMsg) return payloadMsg;
+
+  const directMsg = typeof err?.message === "string" ? err.message.trim() : "";
+  if (directMsg) return directMsg;
+
+  return null;
+}
+
 function mapCoreError(err: unknown): Error {
   if (err instanceof DatasetsClientError) return err;
   if (err instanceof CoreClientError) {
@@ -126,8 +139,9 @@ function mapCoreError(err: unknown): Error {
     const code = err.code || null;
     const detail = (err as any).detail;
     const requestId = err.requestId ?? null;
+    const upstreamMessage = readUpstreamMessage(err);
     if (status === 400) {
-      return new DatasetsClientError("bad_request", {
+      return new DatasetsClientError(upstreamMessage || "bad_request", {
         statusCode: 400,
         code: code ?? "BAD_REQUEST",
         detail,
@@ -135,7 +149,7 @@ function mapCoreError(err: unknown): Error {
       });
     }
     if (status === 401) {
-      return new DatasetsClientError("unauthorized", {
+      return new DatasetsClientError(upstreamMessage || "unauthorized", {
         statusCode: 401,
         code: code ?? "AUTH_REQUIRED",
         detail,
@@ -143,15 +157,18 @@ function mapCoreError(err: unknown): Error {
       });
     }
     if (status === 403) {
-      return new DatasetsClientError("forbidden", {
-        statusCode: 403,
-        code: code ?? "FORBIDDEN",
-        detail,
-        requestId,
-      });
+      return new DatasetsClientError(
+        upstreamMessage || "forbidden",
+        {
+          statusCode: 403,
+          code: code ?? "FORBIDDEN",
+          detail: (err as any)?.payload ?? detail,
+          requestId,
+        }
+      );
     }
     if (status === 404) {
-      return new DatasetsClientError("not_found", {
+      return new DatasetsClientError(upstreamMessage || "not_found", {
         statusCode: 404,
         code: code ?? "NOT_FOUND",
         detail,
@@ -159,7 +176,7 @@ function mapCoreError(err: unknown): Error {
       });
     }
     if (status === 409) {
-      return new DatasetsClientError("conflict", {
+      return new DatasetsClientError(upstreamMessage || "conflict", {
         statusCode: 409,
         code: code ?? "CONFLICT",
         detail,
@@ -167,7 +184,7 @@ function mapCoreError(err: unknown): Error {
       });
     }
     if (status === 422) {
-      return new DatasetsClientError("unprocessable_entity", {
+      return new DatasetsClientError(upstreamMessage || "unprocessable_entity", {
         statusCode: 422,
         code: code ?? "UNPROCESSABLE_ENTITY",
         detail,
@@ -186,6 +203,28 @@ function mapCoreError(err: unknown): Error {
 
 function unwrapResult(res: unknown): unknown {
   return (res as any)?.result ?? res;
+}
+
+function unwrapEntityEnvelope<T = JsonObject>(res: unknown, key: string): T | JsonObject {
+  const out = unwrapResult(res) as any;
+  if (out && typeof out === "object" && out[key] && typeof out[key] === "object") {
+    return out[key] as T;
+  }
+  return (out && typeof out === "object" ? out : {}) as JsonObject;
+}
+
+function readEnvInt(name: string, def: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+function stableIdempotencyKey(prefix: string, datasetKey: string, requestId?: string | null): string {
+  const rid = String(requestId ?? "").trim();
+  if (rid) return `${prefix}:${datasetKey}:${rid}`;
+  return `${prefix}:${datasetKey}`;
 }
 
 export type ListDatasetsQuery = Readonly<{
@@ -216,6 +255,7 @@ export type DatasetsClient = Readonly<{
   // Admin/write routes (no retries)
   upsertDataset: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   ingestVersionFromArtifact: (datasetKey: unknown, body: JsonObject, q?: { setActive?: unknown } | null, ctx?: CoreRequestCtx) => Promise<JsonObject>;
+  ingestAnchoredVersionFromArtifact: (datasetKey: unknown, body: JsonObject, q?: { setActive?: unknown } | null, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   createVersionStrict: (datasetKey: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   activateVersion: (datasetKey: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   setVisibility: (datasetKey: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
@@ -327,24 +367,43 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
   async function upsertDataset(body: JsonObject, ctx?: CoreRequestCtx) {
     try {
       const res = await core.post<any>(`/admin/datasets`, body ?? {}, ctx, { maxRetries: 0 });
-      const out = unwrapResult(res);
-      return out && typeof out === "object" ? (out as JsonObject) : {};
+      return unwrapEntityEnvelope(res, "dataset");
     } catch (e) {
       throw mapCoreError(e);
     }
   }
 
-  async function ingestVersionFromArtifact(datasetKey: unknown, body: JsonObject, q?: { setActive?: unknown } | null, ctx?: CoreRequestCtx) {
+  async function ingestVersionFromArtifact(
+    datasetKey: unknown,
+    body: JsonObject,
+    q?: { setActive?: unknown } | null,
+    ctx?: CoreRequestCtx
+  ) {
     try {
       const key = normalizeDatasetKey(datasetKey);
       const setActive = normalizeOptionalBoolean(q?.setActive, "invalid_set_active", "INVALID_SET_ACTIVE");
-      const qs = buildQueryString({ setActive: setActive === undefined ? undefined : setActive });
+      
+      const qs = buildQueryString({
+        setActive: setActive === undefined ? undefined : setActive,
+      });
+
+      const timeoutMs = readEnvInt("HF_CORE_DATASETS_INGEST_TIMEOUT_MS", 180_000, 15_000, 300_000);
+
+      const effectiveCtx: CoreRequestCtx = {
+        ...(ctx || {}),
+        timeoutMs,
+        idempotencyKey:
+          (ctx as any)?.idempotencyKey ??
+          stableIdempotencyKey("dataset_ingest", key, ctx?.requestId ?? null),
+      };
+
       const res = await core.post<any>(
         `/admin/datasets/${encodeURIComponent(key)}/versions/ingest${qs}`,
         body ?? {},
-        ctx,
+        effectiveCtx,
         { maxRetries: 0 }
       );
+
       const out = unwrapResult(res);
       return out && typeof out === "object" ? (out as JsonObject) : {};
     } catch (e) {
@@ -356,8 +415,7 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
     try {
       const key = normalizeDatasetKey(datasetKey);
       const res = await core.post<any>(`/admin/datasets/${encodeURIComponent(key)}/versions`, body ?? {}, ctx, { maxRetries: 0 });
-      const out = unwrapResult(res);
-      return out && typeof out === "object" ? (out as JsonObject) : {};
+      return unwrapEntityEnvelope(res, "version");
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -378,8 +436,7 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
     try {
       const key = normalizeDatasetKey(datasetKey);
       const res = await core.post<any>(`/admin/datasets/${encodeURIComponent(key)}/visibility`, body ?? {}, ctx, { maxRetries: 0 });
-      const out = unwrapResult(res);
-      return out && typeof out === "object" ? (out as JsonObject) : {};
+      return unwrapEntityEnvelope(res, "dataset");
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -389,8 +446,7 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
     try {
       const key = normalizeDatasetKey(datasetKey);
       const res = await core.post<any>(`/admin/datasets/${encodeURIComponent(key)}/disabled`, body ?? {}, ctx, { maxRetries: 0 });
-      const out = unwrapResult(res);
-      return out && typeof out === "object" ? (out as JsonObject) : {};
+      return unwrapEntityEnvelope(res, "dataset");
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -400,8 +456,7 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
     try {
       const key = normalizeDatasetKey(datasetKey);
       const res = await core.post<any>(`/admin/datasets/${encodeURIComponent(key)}/hcs`, body ?? {}, ctx, { maxRetries: 0 });
-      const out = unwrapResult(res);
-      return out && typeof out === "object" ? (out as JsonObject) : {};
+      return unwrapEntityEnvelope(res, "dataset");
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -418,8 +473,7 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
         ctx,
         { maxRetries: 0 }
       );
-      const out = unwrapResult(res);
-      return out && typeof out === "object" ? (out as JsonObject) : {};
+      return unwrapEntityEnvelope(res, "version");
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -455,6 +509,51 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
     }
   }
 
+  async function ingestAnchoredVersionFromArtifact(
+    datasetKey: unknown,
+    body: JsonObject,
+    q?: { setActive?: unknown } | null,
+    ctx?: CoreRequestCtx
+  ) {
+    try {
+      const key = normalizeDatasetKey(datasetKey);
+      const setActive = normalizeOptionalBoolean(q?.setActive, "invalid_set_active", "INVALID_SET_ACTIVE");
+
+      const qs = buildQueryString({
+        setActive: setActive === undefined ? undefined : setActive,
+      });
+
+      const timeoutMs = readEnvInt("HF_CORE_DATASETS_INGEST_TIMEOUT_MS", 180_000, 15_000, 300_000);
+
+      const hfInternalSecret = String(process.env.HF_INTERNAL_SHARED_SECRET ?? "").trim();
+      const hfActorHeader = String(ctx?.hfActor ?? "").trim();
+
+      const effectiveCtx: CoreRequestCtx = {
+        ...(ctx || {}),
+        timeoutMs,
+        idempotencyKey:
+          (ctx as any)?.idempotencyKey ??
+          stableIdempotencyKey("dataset_anchor_ingest", key, ctx?.requestId ?? null),
+        coreExtraHeaders: {
+          ...(hfInternalSecret ? { "x-hf-internal-secret": hfInternalSecret } : {}),
+          ...(hfActorHeader ? { "x-hf-actor": hfActorHeader } : {}),
+        },
+      };
+
+      const res = await core.post<any>(
+        `/internal/datasets/${encodeURIComponent(key)}/versions/ingest-from-anchor${qs}`,
+        body ?? {},
+        effectiveCtx,
+        { maxRetries: 0 }
+      );
+
+      const out = unwrapResult(res);
+      return out && typeof out === "object" ? (out as JsonObject) : {};
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  }
+
   return {
     getMetrics,
     listDatasets,
@@ -466,6 +565,7 @@ export function makeCoreDatasets(core: CoreClient): DatasetsClient {
     upsertDataset,
     ingestVersionFromArtifact,
     createVersionStrict,
+    ingestAnchoredVersionFromArtifact,
     activateVersion,
     setVisibility,
     setDisabled,

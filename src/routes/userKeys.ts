@@ -521,7 +521,7 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
         coreCtx(req, actor, false, true),
         { maxRetries: 1 }
       );
-      reply.code(200).send({ ok: true, result: scrubSecrets(result) });
+      return reply.code(200).send({ ok: true, result: scrubSecrets(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -541,7 +541,7 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
         coreCtx(req, actor, false, true),
         { maxRetries: 1 }
       );
-      reply.code(200).send({ ok: true, result: scrubSecrets(result) });
+      return reply.code(200).send({ ok: true, result: scrubSecrets(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -572,7 +572,7 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
         coreCtx(req, actor, false, true),
         { maxRetries: 1 }
       );
-      reply.code(200).send({ ok: true, result: scrubSecrets(result) });
+      return reply.code(200).send({ ok: true, result: scrubSecrets(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -603,7 +603,7 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
         coreCtx(req, actor, false, true),
         { maxRetries: 1 }
       );
-      reply.code(200).send({ ok: true, result: scrubSecrets(result) });
+      return reply.code(200).send({ ok: true, result: scrubSecrets(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -640,7 +640,7 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
         { keyType, metadata },
         coreCtx(req, actor, true, passThroughAuth)
       );
-      reply.code(201).send({ ok: true, result: scrubSecrets(result) });
+      return reply.code(201).send({ ok: true, result: scrubSecrets(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -676,7 +676,7 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
         { reseal, metadata },
         coreCtx(req, actor, true, passThroughAuth)
       );
-      reply.code(200).send({ ok: true, result: scrubSecrets(result) });
+      return reply.code(200).send({ ok: true, result: scrubSecrets(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -710,7 +710,7 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
         userId,
         coreCtx(req, actor, true, passThroughAuth)
       );
-      reply.code(200).send({ ok: true, result: scrubSecrets(result) });
+      return reply.code(200).send({ ok: true, result: scrubSecrets(result) });
     } catch (e) {
       throw mapCoreError(e);
     }

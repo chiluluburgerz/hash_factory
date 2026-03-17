@@ -191,7 +191,7 @@ const merkleReadRoutes: FastifyPluginAsync<MerkleReadRoutesOpts> = async (app, o
         coreCtx(req, actor),
         { maxRetries: 0 }
       );
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -218,7 +218,7 @@ const merkleReadRoutes: FastifyPluginAsync<MerkleReadRoutesOpts> = async (app, o
         coreCtx(req, actor),
         { maxRetries: 0 }
       );
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -246,7 +246,7 @@ const merkleReadRoutes: FastifyPluginAsync<MerkleReadRoutesOpts> = async (app, o
         coreCtx(req, actor),
         { maxRetries: 0 }
       );
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -268,7 +268,7 @@ const merkleReadRoutes: FastifyPluginAsync<MerkleReadRoutesOpts> = async (app, o
         coreCtx(req, actor),
         { maxRetries: 0 }
       );
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }

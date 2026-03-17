@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/core/merkleAnchorClient.ts
-// Version: 1.0-hash-factory-merkle-anchor-client | 2026-03-06
+// Version: 1.1-hash-factory-merkle-anchor-client-hardened | 2026-03-14
 // Purpose:
 //   Hash Factory -> Core "Merkle Anchor" client.
 //   - Default auth: service key via CoreClient (CORE_SERVICE_API_KEY)
@@ -8,6 +8,7 @@
 //     (coreAuthHeader/coreApiKey) for user pass-through
 //   - Strict input normalization for anchor routes
 //   - No retries by default; anchor writes are not retried automatically
+//   - Trusted HF root/publish helpers for certificate-eligible flows
 // ============================================================================
 
 import { CoreClient, CoreClientError, CoreRequestCtx } from "./coreClient.js";
@@ -63,6 +64,14 @@ function normalizeUuid(v: unknown, field: string): string {
     });
   }
   return s;
+}
+
+function readEnvInt(name: string, def: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
 function normalizeOptionalUuid(v: unknown, field: string): string | null {
@@ -134,6 +143,66 @@ function normalizeAnchorKind(v: unknown): string | null {
   return s;
 }
 
+function stableIdempotencyKey(prefix: string, basis: string, requestId?: string | null): string {
+  const rid = String(requestId ?? "").trim();
+  if (rid) return `${prefix}:${basis}:${rid}`;
+  return `${prefix}:${basis}`;
+}
+
+function requireTrustedHfContext(ctx?: CoreRequestCtx): {
+  hfInternalSecret: string;
+  hfActorHeader: string;
+} {
+  const hfInternalSecret = String(process.env.HF_INTERNAL_SHARED_SECRET ?? "").trim();
+  if (!hfInternalSecret) {
+    throw new MerkleAnchorClientError("hf_internal_secret_required", {
+      statusCode: 500,
+      code: "HF_INTERNAL_SECRET_REQUIRED",
+    });
+  }
+
+  const hfActorHeader = String(ctx?.hfActor ?? "").trim();
+  if (!hfActorHeader) {
+    throw new MerkleAnchorClientError("hf_actor_required", {
+      statusCode: 500,
+      code: "HF_ACTOR_REQUIRED",
+    });
+  }
+
+  return { hfInternalSecret, hfActorHeader };
+}
+
+function buildTrustedHfCtx(
+  ctx: CoreRequestCtx | undefined,
+  timeoutEnv: string,
+  timeoutDefaultMs: number
+): CoreRequestCtx {
+  const { hfInternalSecret, hfActorHeader } = requireTrustedHfContext(ctx);
+  const timeoutMs = readEnvInt(timeoutEnv, timeoutDefaultMs, 15_000, 300_000);
+  return {
+    ...(ctx || {}),
+    timeoutMs,
+    coreExtraHeaders: {
+      ...((ctx as any)?.coreExtraHeaders ?? {}),
+      "x-hf-internal-secret": hfInternalSecret,
+      "x-hf-actor": hfActorHeader,
+    },
+  };
+}
+
+function buildMerkleWriteCtx(
+  ctx: CoreRequestCtx | undefined,
+  timeoutEnv: string,
+  timeoutDefaultMs: number
+): CoreRequestCtx {
+  const timeoutMs = readEnvInt(timeoutEnv, timeoutDefaultMs, 15_000, 300_000);
+
+  return {
+    ...(ctx || {}),
+    timeoutMs,
+  };
+}
+
 function mapCoreError(err: unknown): Error {
   if (err instanceof MerkleAnchorClientError) return err;
 
@@ -191,6 +260,14 @@ function mapCoreError(err: unknown): Error {
         requestId,
       });
     }
+    if (status === 504) {
+      return new MerkleAnchorClientError("gateway_timeout", {
+        statusCode: 504,
+        code: code ?? "GATEWAY_TIMEOUT",
+        detail,
+        requestId,
+      });
+    }
 
     return new MerkleAnchorClientError("upstream_error", {
       statusCode: 502,
@@ -213,6 +290,8 @@ function unwrapResult(res: unknown): unknown {
 export type MerkleAnchorClient = Readonly<{
   anchorPayload: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   requestRootAnchor: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
+  requestRootAnchorFromHf: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
+  publishExistingAnchorRequestFromHf: (anchorRequestId: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   publishExistingAnchorRequest: (anchorRequestId: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   publishAnchorRequestPublic: (anchorRequestId: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   unpublishAnchorRequestPublic: (anchorRequestId: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
@@ -295,7 +374,13 @@ export function makeCoreMerkleAnchor(core: CoreClient): MerkleAnchorClient {
       if (reason !== null) payload.reason = reason;
       if (idempotencyKey !== null) payload.idempotency_key = idempotencyKey;
 
-      const res = await core.post<any>("/v1/merkle/anchor/root", payload, ctx, { maxRetries: 0 });
+      const effectiveCtx = buildMerkleWriteCtx(
+        ctx,
+        "HF_CORE_MERKLE_ANCHOR_TIMEOUT_MS",
+        180_000
+      );
+
+      const res = await core.post<any>("/v1/merkle/anchor/root", payload, effectiveCtx, { maxRetries: 0 });
       const out = unwrapResult(res);
       return out && typeof out === "object" ? (out as JsonObject) : {};
     } catch (e) {
@@ -331,6 +416,54 @@ export function makeCoreMerkleAnchor(core: CoreClient): MerkleAnchorClient {
         `/v1/merkle/anchor/requests/${encodeURIComponent(id)}/publish`,
         payload,
         ctx,
+        { maxRetries: 0 }
+      );
+      const out = unwrapResult(res);
+      return out && typeof out === "object" ? (out as JsonObject) : {};
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  }
+
+  async function publishExistingAnchorRequestFromHf(
+    anchorRequestId: unknown,
+    body: JsonObject,
+    ctx?: CoreRequestCtx
+  ): Promise<JsonObject> {
+    try {
+      if (!isPlainObject(body)) {
+        throw new MerkleAnchorClientError("invalid_body", {
+          statusCode: 400,
+          code: "INVALID_BODY",
+        });
+      }
+
+      const id = normalizeUuid(anchorRequestId, "anchor_request_id");
+      const proofDate = normalizeYmd(body.proof_date, "proof_date");
+      if (!proofDate) {
+        throw new MerkleAnchorClientError("invalid_request", {
+          statusCode: 400,
+          code: "INVALID_REQUEST",
+          detail: { message: "proof_date is required" },
+        });
+      }
+
+      const effectiveCtx = buildTrustedHfCtx(
+        {
+          ...(ctx || {}),
+          idempotencyKey:
+            (ctx as any)?.idempotencyKey ??
+            stableIdempotencyKey("merkle_anchor_publish_hf", id, ctx?.requestId ?? null),
+        },
+        "HF_CORE_MERKLE_ANCHOR_PUBLISH_TIMEOUT_MS",
+        120_000
+      );
+
+      const payload: JsonObject = { proof_date: proofDate };
+      const res = await core.post<any>(
+        `/internal/merkle/anchor/requests/${encodeURIComponent(id)}/publish-from-hf`,
+        payload,
+        effectiveCtx,
         { maxRetries: 0 }
       );
       const out = unwrapResult(res);
@@ -429,9 +562,67 @@ export function makeCoreMerkleAnchor(core: CoreClient): MerkleAnchorClient {
     }
   }
 
+  async function requestRootAnchorFromHf(body: JsonObject, ctx?: CoreRequestCtx): Promise<JsonObject> {
+    try {
+      if (!isPlainObject(body)) {
+        throw new MerkleAnchorClientError("invalid_body", {
+          statusCode: 400,
+          code: "INVALID_BODY",
+        });
+      }
+
+      const rootId = normalizeOptionalUuid(body.rootId, "root_id");
+      const proofDate = normalizeYmd(body.proofDate, "proof_date");
+      const domain = normalizeOptionalDomain(body.domain);
+      const anchorKind = normalizeAnchorKind(body.anchor_kind);
+      const reason = normalizeOptionalString(body.reason, "reason", 1024);
+      const idempotencyKey = normalizeOptionalString(body.idempotency_key, "idempotency_key", 256);
+
+      if (!rootId) {
+        throw new MerkleAnchorClientError("invalid_request", {
+          statusCode: 400,
+          code: "INVALID_REQUEST",
+          detail: { message: "rootId is required for trusted HF root anchor" },
+        });
+      }
+
+      const basis = rootId;
+
+      const payload: JsonObject = {};
+      if (rootId) payload.rootId = rootId;
+      if (proofDate) payload.proofDate = proofDate;
+      if (domain) payload.domain = domain;
+      if (anchorKind) payload.anchor_kind = anchorKind;
+      if (reason !== null) payload.reason = reason;
+      payload.idempotency_key =
+        idempotencyKey ??
+        stableIdempotencyKey("merkle_root_anchor_hf", basis, ctx?.requestId ?? null);
+
+      const effectiveCtx = buildTrustedHfCtx(
+        ctx,
+        "HF_CORE_MERKLE_ROOT_ANCHOR_TIMEOUT_MS",
+        120_000
+      );
+
+      const res = await core.post<any>(
+        "/internal/merkle/anchor/root-from-hf",
+        payload,
+        effectiveCtx,
+        { maxRetries: 0 }
+      );
+
+      const out = unwrapResult(res);
+      return out && typeof out === "object" ? (out as JsonObject) : {};
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  }
+
   return {
     anchorPayload,
     requestRootAnchor,
+    requestRootAnchorFromHf,
+    publishExistingAnchorRequestFromHf,
     publishExistingAnchorRequest,
     publishAnchorRequestPublic,
     unpublishAnchorRequestPublic,

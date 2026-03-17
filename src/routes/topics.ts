@@ -349,7 +349,7 @@ export const topicsRoutes: FastifyPluginAsync<TopicsRoutesOpts> = async (app: Fa
       // result is shaped: { ok, result: { org_id, policy, created, ensured, errors, meta } }
       // Mirror Core status semantics for cleaner UI handling.
       const sc = statusFromBootstrapResult(result);
-      reply.code(sc).send(result);
+      return reply.code(sc).send(result);
     } catch (e) {
       throw mapCoreError(e);
     }

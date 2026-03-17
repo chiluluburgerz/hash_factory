@@ -8,3 +8,6 @@ export * from "./fileHash.js";
 export * from "./merkle.js";
 export * from "./bundle.js";
 export * from "./workflow.js";
+export * from "./validators.js";
+export * from "./receipt.js";
+export * from "./verifier.js";

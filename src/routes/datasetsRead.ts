@@ -160,7 +160,7 @@ const datasetsReadRoutes: FastifyPluginAsync<DatasetsReadRoutesOpts> = async (ap
       }
 
       const result = await datasets.getMetrics({ program: q.program }, coreCtx(req, actor), { maxRetries: 1 });
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -182,7 +182,7 @@ const datasetsReadRoutes: FastifyPluginAsync<DatasetsReadRoutesOpts> = async (ap
       }
 
       const result = await datasets.listDatasets(q, coreCtx(req, actor), { maxRetries: 1 });
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -204,7 +204,7 @@ const datasetsReadRoutes: FastifyPluginAsync<DatasetsReadRoutesOpts> = async (ap
       }
 
       const result = await datasets.listLatestVersions(q, coreCtx(req, actor), { maxRetries: 1 });
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -215,7 +215,7 @@ const datasetsReadRoutes: FastifyPluginAsync<DatasetsReadRoutesOpts> = async (ap
     try {
       const key = String((req.params as any)?.datasetKey ?? "");
       const result = await datasets.getDataset(key, coreCtx(req, actor), { maxRetries: 1 });
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -226,7 +226,7 @@ const datasetsReadRoutes: FastifyPluginAsync<DatasetsReadRoutesOpts> = async (ap
     try {
       const key = String((req.params as any)?.datasetKey ?? "");
       const result = await datasets.getActiveManifest(key, coreCtx(req, actor), { maxRetries: 1 });
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -237,7 +237,7 @@ const datasetsReadRoutes: FastifyPluginAsync<DatasetsReadRoutesOpts> = async (ap
     try {
       const key = String((req.params as any)?.datasetKey ?? "");
       const result = await datasets.resolveActiveVersionRow(key, coreCtx(req, actor), { maxRetries: 1 });
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }

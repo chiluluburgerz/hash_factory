@@ -1,0 +1,810 @@
+import React from "react";
+import {
+  Database,
+  RefreshCw,
+  Search,
+  Link2,
+  ShieldCheck,
+  Globe,
+  Lock,
+  Building2,
+  ChevronDown,
+  ChevronRight,
+  FolderUp,
+  FileCheck2,
+  ArrowRight,
+  Layers3,
+  ScrollText,
+  Package,
+} from "lucide-react";
+import { Link } from "react-router-dom";
+
+import useAppContext from "@/app/hooks/useAppContext.js";
+import EntitySection from "@/components/base/entity-section.jsx";
+import { Badge } from "@/components/base/badge";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/base/card";
+import { Button } from "@/components/base/button";
+import EntitySummaryCard from "@/components/entities/entity-summary-card.jsx";
+import EntityKeyValueGrid from "@/components/entities/entity-key-value-grid.jsx";
+import JsonBlock from "@/components/entities/json-block.jsx";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/base/table.jsx";
+import { fetchJsonOrThrow } from "@/lib/apiClient.js";
+
+function normalizeDatasetsEnvelope(payload) {
+  const root = payload?.result ?? payload ?? null;
+
+  const rows =
+    Array.isArray(root)
+      ? root
+      : Array.isArray(root?.rows)
+        ? root.rows
+        : Array.isArray(root?.items)
+          ? root.items
+          : Array.isArray(root?.datasets)
+            ? root.datasets
+            : Array.isArray(payload?.rows)
+              ? payload.rows
+              : Array.isArray(payload?.items)
+                ? payload.items
+                : Array.isArray(payload?.datasets)
+                  ? payload.datasets
+                  : [];
+
+  const total = Number(root?.total ?? payload?.total ?? rows.length) || 0;
+  const nextCursor = root?.nextCursor ?? payload?.nextCursor ?? null;
+
+  return {
+    rows,
+    total,
+    nextCursor,
+  };
+}
+
+function normalizeMetricsEnvelope(payload) {
+  return payload?.result ?? payload ?? {};
+}
+
+function getDatasetKey(row) {
+  return row?.dataset_key || row?.key || row?.datasetKey || row?.id || "";
+}
+
+function getDatasetLabel(row) {
+  return (
+    row?.display_name ||
+    row?.dataset_label ||
+    row?.label ||
+    row?.name ||
+    row?.dataset_name ||
+    row?.dataset_key ||
+    "Unnamed dataset"
+  );
+}
+
+function getDatasetVisibility(row) {
+  const raw = String(
+    row?.visibility ||
+    row?.visibility_kind ||
+    row?.publish_visibility ||
+    ""
+  ).trim().toLowerCase();
+
+  if (!raw) return "unknown";
+  if (raw === "organization" || raw === "organization_only") return "org";
+  return raw;
+}
+
+function visibilityVariant(visibility) {
+  switch (visibility) {
+    case "public":
+      return "success";
+    case "org":
+      return "outline";
+    case "private":
+      return "warn";
+    default:
+      return "outline";
+  }
+}
+
+function visibilityLabel(visibility) {
+  switch (visibility) {
+    case "public":
+      return "Public";
+    case "org":
+      return "Org";
+    case "private":
+      return "Private";
+    default:
+      return visibility || "Unknown";
+  }
+}
+
+function getDatasetStatus(row) {
+  const raw = String(
+    row?.status ||
+    row?.lifecycle_status ||
+    row?.state ||
+    ""
+  ).trim().toLowerCase();
+
+  if (raw) return raw;
+  if (row?.disabled === true || row?.is_disabled === true) return "disabled";
+  return "active";
+}
+
+function statusVariant(status) {
+  switch (status) {
+    case "active":
+    case "ready":
+    case "published":
+      return "success";
+    case "processing":
+    case "pending":
+    case "building":
+      return "warn";
+    case "disabled":
+    case "archived":
+    case "failed":
+    case "error":
+      return "outline";
+    default:
+      return "outline";
+  }
+}
+
+function statusLabel(status) {
+  if (!status) return "Unknown";
+  return status.replace(/_/g, " ");
+}
+
+function getDatasetTrustState(row) {
+  if (row?.mirror_verified) return "verified";
+
+  if (
+    row?.dataset_hcs_topic_id ||
+    row?.dataset_hcs_transaction_id ||
+    row?.dataset_hcs_message_id ||
+    row?.hcs_topic_id ||
+    row?.hcs_transaction_id ||
+    row?.hcs_message_id
+  ) {
+    return "anchored";
+  }
+
+  return "unanchored";
+}
+
+function trustVariant(trust) {
+  switch (trust) {
+    case "verified":
+      return "success";
+    case "anchored":
+      return "outline";
+    case "unanchored":
+      return "warn";
+    default:
+      return "outline";
+  }
+}
+
+function trustLabel(trust) {
+  switch (trust) {
+    case "verified":
+      return "Verified";
+    case "anchored":
+      return "Anchored";
+    case "unanchored":
+      return "Unanchored";
+    default:
+      return trust || "Unknown";
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(ms));
+}
+
+function formatRelative(value) {
+  if (!value) return "never";
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return "—";
+
+  const diff = ms - Date.now();
+  const abs = Math.abs(diff);
+
+  const units = [
+    { max: 60_000, div: 1000, name: "second" },
+    { max: 3_600_000, div: 60_000, name: "minute" },
+    { max: 86_400_000, div: 3_600_000, name: "hour" },
+    { max: 2_592_000_000, div: 86_400_000, name: "day" },
+    { max: 31_536_000_000, div: 2_592_000_000, name: "month" },
+    { max: Number.POSITIVE_INFINITY, div: 31_536_000_000, name: "year" },
+  ];
+
+  const picked = units.find((u) => abs < u.max) || units[units.length - 1];
+  const valueInt = Math.max(1, Math.round(abs / picked.div));
+
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(
+    diff < 0 ? -valueInt : valueInt,
+    picked.name
+  );
+}
+
+function shortText(value, max = 44) {
+  const s = String(value || "").trim();
+  if (!s) return "—";
+  if (s.length <= max) return s;
+  return `${s.slice(0, Math.max(12, max - 12))}…${s.slice(-10)}`;
+}
+
+function pickFirstNumber(...vals) {
+  for (const v of vals) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function matchesDatasetQuery(row, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+
+  const haystack = [
+    getDatasetKey(row),
+    getDatasetLabel(row),
+    row?.program,
+    row?.org_id,
+    row?.owner_user_id,
+    row?.user_id,
+    row?.dataset_fingerprint,
+    row?.fingerprint_hash,
+    row?.fingerprint,
+    row?.manifest_hash,
+    row?.active_manifest_hash,
+    row?.dataset_hcs_topic_id,
+    row?.dataset_hcs_transaction_id,
+    row?.dataset_hcs_message_id,
+    row?.hcs_topic_id,
+    row?.hcs_transaction_id,
+    row?.hcs_message_id,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes(q);
+}
+
+function DatasetVisibilityBadge({ visibility }) {
+  const Icon =
+    visibility === "public"
+      ? Globe
+      : visibility === "org"
+        ? Building2
+        : visibility === "private"
+          ? Lock
+          : Database;
+
+  return (
+    <Badge variant={visibilityVariant(visibility)}>
+      <Icon className="mr-1 h-3.5 w-3.5" />
+      {visibilityLabel(visibility)}
+    </Badge>
+  );
+}
+
+function DatasetStatusBadge({ status }) {
+  return <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>;
+}
+
+function DatasetTrustBadge({ trust }) {
+  return <Badge variant={trustVariant(trust)}>{trustLabel(trust)}</Badge>;
+}
+
+function DatasetWorkflowCard({
+  icon: Icon,
+  title,
+  description,
+  bullets,
+  primaryTo,
+  primaryLabel,
+  secondaryTo = null,
+  secondaryLabel = null,
+}) {
+  return (
+    <Card className="border-border/60 bg-card/35 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Icon className="h-4 w-4" />
+          {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        <div className="space-y-2 text-sm text-muted-foreground">
+          {bullets.map((item) => (
+            <div key={item} className="flex items-start gap-2">
+              <span className="mt-[0.45rem] h-1.5 w-1.5 rounded-full bg-foreground/50" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Button asChild>
+            <Link to={primaryTo}>
+              <ArrowRight className="mr-2 h-4 w-4" />
+              {primaryLabel}
+            </Link>
+          </Button>
+
+          {secondaryTo && secondaryLabel ? (
+            <Button asChild variant="outline">
+              <Link to={secondaryTo}>{secondaryLabel}</Link>
+            </Button>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DatasetTableRow({
+  row,
+  expandedRowId,
+  onToggleExpanded,
+}) {
+  const datasetKey = getDatasetKey(row);
+  const expanded = expandedRowId === datasetKey;
+  const visibility = getDatasetVisibility(row);
+  const status = getDatasetStatus(row);
+  const trust = getDatasetTrustState(row);
+
+  const itemsEstimate = pickFirstNumber(
+    row?.items_estimate,
+    row?.items_count_estimate,
+    row?.items_count,
+    row?.row_count
+  );
+
+  const bytesEstimate = pickFirstNumber(
+    row?.bytes_estimate,
+    row?.bytes_total_estimate,
+    row?.bytes_total,
+    row?.artifact_bytes
+  );
+
+  const fingerprint =
+    row?.dataset_fingerprint ||
+    row?.fingerprint_hash ||
+    row?.fingerprint ||
+    row?.input_hash ||
+    "";
+
+  const updatedAt = row?.updated_at || row?.sealed_at || row?.created_at || null;
+
+  return (
+    <>
+      <TableRow>
+        <TableCell className="w-[44px]">
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-card/30 hover:bg-muted/30"
+            onClick={() => onToggleExpanded(datasetKey)}
+            aria-label={expanded ? "Collapse row" : "Expand row"}
+          >
+            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </button>
+        </TableCell>
+
+        <TableCell className="min-w-[260px]">
+          <div>
+            <Link
+              to={`/app/datasets/${encodeURIComponent(datasetKey)}`}
+              className="text-sm font-semibold text-foreground/90 underline-offset-4 hover:underline"
+            >
+              {getDatasetLabel(row)}
+            </Link>
+          </div>
+          <div className="mt-1 font-mono text-xs text-muted-foreground">
+            {shortText(datasetKey, 42)}
+          </div>
+        </TableCell>
+
+        <TableCell className="min-w-[120px]">
+          <DatasetVisibilityBadge visibility={visibility} />
+        </TableCell>
+
+        <TableCell className="min-w-[120px]">
+          <DatasetStatusBadge status={status} />
+        </TableCell>
+
+        <TableCell className="min-w-[120px]">
+          <DatasetTrustBadge trust={trust} />
+        </TableCell>
+
+        <TableCell className="min-w-[150px]">
+          <div className="text-sm text-foreground/85">
+            {bytesEstimate != null ? `${Number(bytesEstimate).toLocaleString()} bytes` : "Bytes n/a"}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {itemsEstimate != null ? `${Number(itemsEstimate).toLocaleString()} items` : "Items n/a"}
+          </div>
+        </TableCell>
+
+        <TableCell className="min-w-[140px]">
+          <div className="text-sm text-foreground/85">
+            {updatedAt ? formatRelative(updatedAt) : "—"}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {formatDateTime(updatedAt)}
+          </div>
+        </TableCell>
+      </TableRow>
+
+      {expanded ? (
+        <TableRow>
+          <TableCell colSpan={7} className="bg-card/20">
+            <div className="grid gap-6 lg:grid-cols-2">
+              <EntityKeyValueGrid
+                title="Dataset identity"
+                items={[
+                  { key: "dataset_key", label: "Dataset key", value: datasetKey, mono: true },
+                  { key: "label", label: "Label", value: getDatasetLabel(row) },
+                  { key: "program", label: "Program", value: row?.program || "—" },
+                  { key: "org_id", label: "Org id", value: row?.org_id, mono: true },
+                  { key: "owner_user_id", label: "Owner user id", value: row?.owner_user_id || row?.user_id, mono: true },
+                ]}
+              />
+
+              <EntityKeyValueGrid
+                title="Trust and registry posture"
+                items={[
+                  { key: "visibility", label: "Visibility", value: visibilityLabel(visibility) },
+                  { key: "status", label: "Status", value: statusLabel(status) },
+                  { key: "trust", label: "Trust state", value: trustLabel(trust) },
+                  { key: "active_version", label: "Active version", value: row?.active_version != null ? String(row.active_version) : "—" },
+                  { key: "fingerprint", label: "Fingerprint", value: fingerprint || "—", mono: true },
+                  { key: "manifest_hash", label: "Manifest hash", value: row?.active_manifest_hash || row?.manifest_hash || "—", mono: true },
+                  {
+                    key: "dataset_hcs_transaction_id",
+                    label: "Dataset HCS txn",
+                    value: row?.dataset_hcs_transaction_id || row?.hcs_transaction_id || "—",
+                    mono: true,
+                  },
+                  {
+                    key: "dataset_hcs_message_id",
+                    label: "Dataset HCS msg",
+                    value: row?.dataset_hcs_message_id || row?.hcs_message_id || "—",
+                    mono: true,
+                  },
+                ]}
+              />
+            </div>
+
+            <div className="mt-6">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Metadata
+              </div>
+              <JsonBlock value={row?.metadata} emptyLabel="No metadata" />
+            </div>
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  );
+}
+
+export default function DatasetsPage() {
+  const { resourceErrors } = useAppContext();
+
+  const [rows, setRows] = React.useState([]);
+  const [metrics, setMetrics] = React.useState({});
+  const [total, setTotal] = React.useState(0);
+  const [nextCursor, setNextCursor] = React.useState(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [pageError, setPageError] = React.useState("");
+  const [search, setSearch] = React.useState("");
+  const [visibilityFilter, setVisibilityFilter] = React.useState("all");
+  const [expandedRowId, setExpandedRowId] = React.useState(null);
+
+  const topError = pageError || resourceErrors?.datasets?.message || "";
+
+  const loadDatasets = React.useCallback(async () => {
+    setIsLoading(true);
+    setPageError("");
+
+    try {
+      const qs = new URLSearchParams();
+      qs.set("limit", "100");
+      qs.set("offset", "0");
+
+      if (visibilityFilter !== "all") {
+        qs.set("visibility", visibilityFilter);
+      }
+
+      const [datasetsPayload, metricsPayload] = await Promise.all([
+        fetchJsonOrThrow(`/datasets?${qs.toString()}`),
+        fetchJsonOrThrow("/datasets/metrics").catch(() => null),
+      ]);
+
+      const normalized = normalizeDatasetsEnvelope(datasetsPayload);
+      const nextMetrics = metricsPayload ? normalizeMetricsEnvelope(metricsPayload) : {};
+
+      setRows(Array.isArray(normalized.rows) ? normalized.rows : []);
+      setTotal(Number(normalized.total ?? 0) || 0);
+      setNextCursor(normalized.nextCursor || null);
+      setMetrics(nextMetrics);
+    } catch (err) {
+      setRows([]);
+      setTotal(0);
+      setNextCursor(null);
+      setMetrics({});
+      setPageError(err?.message || "Failed to load datasets.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [visibilityFilter]);
+
+  React.useEffect(() => {
+    void loadDatasets();
+  }, [loadDatasets]);
+
+  const filteredRows = React.useMemo(() => {
+    return rows.filter((row) => matchesDatasetQuery(row, search));
+  }, [rows, search]);
+
+  const stats = React.useMemo(() => {
+    const anchored = rows.filter((row) => {
+      const trust = getDatasetTrustState(row);
+      return trust === "anchored" || trust === "verified";
+    }).length;
+
+    const publicCount = rows.filter((row) => getDatasetVisibility(row) === "public").length;
+    const active = rows.filter((row) => {
+      const s = getDatasetStatus(row);
+      return s === "active" || s === "ready" || s === "published";
+    }).length;
+
+    return {
+      active,
+      anchored,
+      publicCount,
+      metricsTotal:
+        Number(metrics?.total ?? metrics?.datasets_total ?? metrics?.dataset_count ?? total) || total,
+    };
+  }, [rows, metrics, total]);
+
+  function toggleExpanded(rowId) {
+    setExpandedRowId((prev) => (prev === rowId ? null : rowId));
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-2">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+            Datasets
+          </h1>
+          <p className="max-w-3xl text-sm text-muted-foreground">
+            Browse registered datasets, inspect registry and trust posture, and choose between the managed guided flow, the local-first bridge flow, or downstream dataset inspection.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" onClick={() => void loadDatasets()}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {topError ? (
+        <div className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+          {topError}
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <EntitySummaryCard
+          title="Visible datasets"
+          value={Number(stats.metricsTotal).toLocaleString()}
+          hint="Dataset identities visible to the current authenticated context."
+          icon={Database}
+        />
+
+        <EntitySummaryCard
+          title="Public datasets"
+          value={Number(stats.publicCount).toLocaleString()}
+          hint="Datasets currently surfaced with public visibility."
+          icon={Globe}
+        />
+
+        <EntitySummaryCard
+          title="Active / ready"
+          value={Number(stats.active).toLocaleString()}
+          hint="Datasets currently positioned for downstream use or review."
+          icon={ShieldCheck}
+        />
+
+        <EntitySummaryCard
+          title="Anchored"
+          value={Number(stats.anchored).toLocaleString()}
+          hint="Datasets with observed HCS trust signals."
+          icon={Link2}
+        />
+      </div>
+
+      <EntitySection
+        title="Choose a dataset workflow"
+        description="The dataset slice supports three current postures: managed guided anchoring, local-first evidence finalization, and registry-grade inspection. Browser raw upload is not the current dataset posture."
+      >
+        <div className="grid gap-4 xl:grid-cols-2">
+          <DatasetWorkflowCard
+            icon={FolderUp}
+            title="Guided dataset anchor"
+            description="HF runs the managed dataset flow: preview the plan, hash in the HF runtime, write the dataset and version record, publish when appropriate, and inspect the resulting trust output."
+            bullets={[
+              "Best for demos, managed environments, and internal operator workflows.",
+              "Best current surface for assisted onboarding and partner-led imports of existing web2 datasets.",
+              "Uses a dataset root that is available to the HF runtime.",
+              "Returns receipts, trust signals, publication state, and certificate output when eligible.",
+            ]}
+            primaryTo="/app/datasets/anchor"
+            primaryLabel="Open guided anchor"
+          />
+
+          <DatasetWorkflowCard
+            icon={Package}
+            title="Local-first submit"
+            description="Compute deterministic evidence locally with the package or script, then submit that evidence into HF to finalize registry-backed state without sending raw dataset material through the request."
+            bullets={[
+              "Best for privacy-sensitive and operator-grade workflows.",
+              "Acts as the current bridge between the local package and anchored finalization.",
+              "Best near-term path before a desktop app exists.",
+              "Lets HF verify submitted evidence and complete the dataset, version, publication, and certificate transition.",
+            ]}
+            primaryTo="/app/datasets/submit"
+            primaryLabel="Open local-first submit"
+          />
+        </div>
+      </EntitySection>
+
+      <EntitySection
+        title="Dataset registry"
+        description="Search by name, dataset key, fingerprint, program, or trust identifiers. Use visibility to narrow what you are reviewing, then expand a row or open the detail page for deeper inspection."
+      >
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-1 items-center gap-2 rounded-xl border border-border/60 bg-card/25 px-3 py-2">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search dataset key, name, fingerprint, program, org id, or HCS ids"
+              className="w-full bg-transparent text-sm outline-none"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              ["all", "All"],
+              ["public", "Public"],
+              ["org", "Org"],
+              ["private", "Private"],
+            ].map(([value, label]) => (
+              <Button
+                key={value}
+                type="button"
+                variant={visibilityFilter === value ? "default" : "outline"}
+                onClick={() => setVisibilityFilter(value)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-4">
+          {isLoading ? (
+            <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
+              Loading datasets...
+            </div>
+          ) : filteredRows.length === 0 ? (
+            <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
+              No datasets matched the current view.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[44px]"></TableHead>
+                  <TableHead>Dataset</TableHead>
+                  <TableHead>Visibility</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Trust</TableHead>
+                  <TableHead>Size</TableHead>
+                  <TableHead>Updated</TableHead>
+                </TableRow>
+              </TableHeader>
+
+              <TableBody>
+                {filteredRows.map((row) => {
+                  const datasetKey = getDatasetKey(row);
+                  return (
+                    <DatasetTableRow
+                      key={datasetKey || `${row?.org_id}-${row?.created_at || Math.random()}`}
+                      row={row}
+                      expandedRowId={expandedRowId}
+                      onToggleExpanded={toggleExpanded}
+                    />
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+
+        {nextCursor ? (
+          <div className="mt-4 text-xs text-muted-foreground">
+            More dataset pages are available. Cursor-based pagination can be added later once the public-facing registry workflow is fully locked.
+          </div>
+        ) : null}
+      </EntitySection>
+
+      <EntitySection
+        title="How to use this page"
+        description="This page is the registry and workflow entry surface for the dataset slice."
+      >
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+              <Database className="h-4 w-4" />
+              Stable identity
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The dataset key is the durable registry identity. Use it when you need a precise reference across ingest, publication, trust review, verification, and partner-assisted onboarding conversations.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+              <Layers3 className="h-4 w-4" />
+              Choose the right flow
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Guided anchor is the managed path. Local-first submit is the bridge from locally computed evidence into anchored finalization. The detail page is where you inspect the resulting long-lived state.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+              <FileCheck2 className="h-4 w-4" />
+              Trust review
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Use trust state, visibility, active version, HCS linkage, and publication posture to quickly decide which datasets deserve deeper review on the detail page.
+            </p>
+          </div>
+        </div>
+      </EntitySection>
+    </div>
+  );
+}

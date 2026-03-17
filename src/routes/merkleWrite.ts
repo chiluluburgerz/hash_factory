@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/routes/merkleWrite.ts
-// Version: 1.0-hash-factory-merkle-write-routes | 2026-03-06
+// Version: 1.1-hash-factory-merkle-write-routes-shaped | 2026-03-15
 // Purpose:
 //   Fastify "Merkle operational" WRITE routes for Hash Factory (proxy to Core).
 //   - /v1/merkle/root/publish
@@ -197,6 +197,16 @@ function coreCtx(req: FastifyRequest, actor: Actor | null, forWrite: boolean) {
 }
 
 function mapCoreError(err: unknown): Error {
+  if (err && typeof err === "object" && ("statusCode" in err || "code" in err)) {
+    const e: any = new Error((err as any).message || "request_failed");
+    e.statusCode = Number((err as any).statusCode ?? 500);
+    e.code = String((err as any).code ?? "INTERNAL_ERROR");
+    if ((err as any).detail !== undefined) e.detail = (err as any).detail;
+    if ((err as any).upstream_request_id !== undefined) e.upstream_request_id = (err as any).upstream_request_id;
+    if ((err as any).upstream_detail !== undefined) e.upstream_detail = (err as any).upstream_detail;
+    return e;
+  }
+
   if (err instanceof MerkleClientError) {
     const e: any = new Error(err.message || "upstream_error");
     const sc = Number(err.statusCode);
@@ -220,6 +230,92 @@ function mapCoreError(err: unknown): Error {
   e.statusCode = 500;
   e.code = "INTERNAL_ERROR";
   return e;
+}
+
+function asPlainObject(v: unknown): Record<string, unknown> | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  return v as Record<string, unknown>;
+}
+
+function pick(obj: Record<string, unknown> | null, keys: string[]): Record<string, unknown> | null {
+  if (!obj) return null;
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (obj[k] !== undefined) out[k] = obj[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function shapeRoot(resultLike: unknown): Record<string, unknown> {
+  const result = asPlainObject(resultLike) ?? {};
+  return {
+    ...(pick(result, [
+      "success",
+      "skipped",
+      "reason",
+      "id",
+      "root_id",
+      "proof_date",
+      "domain",
+      "status",
+      "root_hash",
+      "leaf_count",
+      "snapshot_cutoff_ts",
+      "snapshot_leaf_count",
+      "build_version",
+      "hash_alg",
+      "tree_alg",
+      "mirror_verified",
+      "mirror_verified_at",
+      "verified_at",
+      "created_at",
+      "updated_at",
+    ]) ?? {}),
+    publish: pick(result, [
+      "topic_name",
+      "hcs_topic_id",
+      "hcs_transaction_id",
+      "hcs_message_id",
+      "message_id",
+    ]),
+  };
+}
+
+function shapeProof(resultLike: unknown): Record<string, unknown> {
+  const result = asPlainObject(resultLike) ?? {};
+  const proof = asPlainObject(result.proof);
+  return {
+    success: Boolean(result.success),
+    proof: pick(proof, [
+      "proof_date",
+      "domain",
+      "entity_id",
+      "leaf_hash",
+      "root_hash",
+      "path",
+      "root_id",
+    ]),
+  };
+}
+
+function shapePublicPublish(resultLike: unknown): Record<string, unknown> | null {
+  const result = asPlainObject(resultLike);
+  if (!result) return null;
+  const meta = asPlainObject(result.meta);
+  return {
+    ...(pick(result, [
+      "id",
+      "org_id",
+      "entity_kind",
+      "entity_id",
+      "proof_date",
+      "visibility",
+      "share_token",
+      "published_at",
+      "published_by",
+    ]) ?? {}),
+    ...(meta ? { meta } : {}),
+  };
 }
 
 function ensureNoStore(app: FastifyInstance) {
@@ -247,13 +343,25 @@ const merkleWriteRoutes: FastifyPluginAsync<MerkleWriteRoutesOpts> = async (app,
   const requireAuth = app.requireAuth();
   ensureNoStore(app);
 
+  app.post("/v1/merkle/root/build", { preHandler: requireAuth }, async (req, reply) => {
+    const actor = requireActor(req);
+    requireTenantAdminOrSystem(actor);
+    const body = requireBodyObject(req);
+    try {
+      const result = await merkle.buildRoot(body, coreCtx(req, actor, true));
+      return reply.code(200).send({ ok: true, result: shapeRoot(result) });
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  });
+
   app.post("/v1/merkle/root/publish", { preHandler: requireAuth }, async (req, reply) => {
     const actor = requireActor(req);
     requireTenantAdminOrSystem(actor);
     const body = requireBodyObject(req);
     try {
       const result = await merkle.publishRoot(body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result: shapeRoot(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -265,7 +373,7 @@ const merkleWriteRoutes: FastifyPluginAsync<MerkleWriteRoutesOpts> = async (app,
     const body = requireBodyObject(req);
     try {
       const result = await merkle.publishRootPublic(body, coreCtx(req, actor, true));
-      reply.code(201).send({ ok: true, result });
+      return reply.code(201).send({ ok: true, result: shapePublicPublish(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -277,7 +385,7 @@ const merkleWriteRoutes: FastifyPluginAsync<MerkleWriteRoutesOpts> = async (app,
     const body = requireBodyObject(req);
     try {
       const result = await merkle.unpublishRootPublic(body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result: shapePublicPublish(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -290,7 +398,7 @@ const merkleWriteRoutes: FastifyPluginAsync<MerkleWriteRoutesOpts> = async (app,
     try {
       const result = await merkle.buildAndStoreProof(body, coreCtx(req, actor, true));
       const ok = Boolean((result as any)?.success);
-      reply.code(ok ? 201 : 404).send({ ok: true, result });
+      return reply.code(ok ? 201 : 404).send({ ok: true, result: shapeProof(result) });
     } catch (e) {
       throw mapCoreError(e);
     }

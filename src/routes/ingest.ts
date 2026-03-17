@@ -23,6 +23,7 @@ import {
   MerkleAnchorClientError,
   type MerkleAnchorClient,
 } from "../core/merkleAnchorClient.js";
+import { MerkleClientError, type MerkleClient } from "../core/merkleClient.js";
 import { planIngest } from "../ingest/execute.js";
 import { makeIngestOrchestrator } from "../ingest/orchestrator.js";
 import { IngestError, IngestValidationError } from "../ingest/errors.js";
@@ -235,6 +236,16 @@ function mapRouteError(err: unknown): Error {
     return e;
   }
 
+  if (err instanceof MerkleClientError) {
+    const e: any = new Error(err.message || "upstream_error");
+    const sc = Number(err.statusCode);
+    e.statusCode = sc >= 400 && sc <= 599 ? sc : 502;
+    e.code = err.code || (e.statusCode >= 500 ? "UPSTREAM_ERROR" : "BAD_REQUEST");
+    if ((err as any).requestId) e.upstream_request_id = (err as any).requestId;
+    if ((err as any).detail !== undefined) e.upstream_detail = (err as any).detail;
+    return e;
+  }
+
   if (err instanceof CoreClientError) {
     const e: any = new Error(err.message || "upstream_error");
     e.statusCode = err.status >= 400 && err.status <= 599 ? err.status : 502;
@@ -286,11 +297,13 @@ function pickBody(body: Record<string, unknown>, allowed: ReadonlyArray<string>)
 
 export type IngestRoutesOpts = Readonly<{
   merkleAnchor: MerkleAnchorClient;
+  merkle: MerkleClient;
 }>;
 
 const ingestRoutes: FastifyPluginAsync<IngestRoutesOpts> = async (app, opts) => {
   if (!opts?.merkleAnchor) throw new Error("ingestRoutes requires merkleAnchor client");
-  const orch = makeIngestOrchestrator(opts.merkleAnchor);
+  if (!opts?.merkle) throw new Error("ingestRoutes requires merkle client");
+  const orch = makeIngestOrchestrator(opts.merkleAnchor, opts.merkle);
 
   const requireAuth = app.requireAuth();
   ensureNoStore(app);

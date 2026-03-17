@@ -1,17 +1,20 @@
 // ============================================================================
 // File: src/core/coreClient.ts
-// Version: 1.2-hash-factory-core-client | 2026-03-05
+// Version: 1.4-hash-factory-core-client-pass-through-hardened | 2026-03-12
 // Purpose:
 //   Minimal, disciplined HTTP client for Hash Factory -> Core Backend.
 //   - Service-to-service auth via CORE_SERVICE_API_KEY
+//   - Optional strict pass-through auth requirement per request
 //   - Propagates request correlation ids
 //   - Strict timeouts
 //   - No retries by default (callers opt-in for safe GETs only)
-// V1.1: added optional retry config per call with safe defaults and caps.
+// Changes (v1.4):
+//   - Adds requirePassThroughAuth gate for user-bound gateway calls
+//   - Treats 2xx non-JSON / invalid JSON upstream responses as invalid upstream
+//   - Preserves service-key fallback for internal flows that do not require pass-through
 // ============================================================================
 
 type Json = Record<string, unknown>;
-
 type AnyResponse = any;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
@@ -39,13 +42,24 @@ export type CoreRequestCtx = Readonly<{
   idempotencyKey?: string | null;
   coreAuthHeader?: string | null;
   coreApiKey?: string | null;
+  coreExtraHeaders?: Record<string, string> | null;
 
   // Optional per-request timeout overrides (ms). Use only for known slow endpoints.
   timeoutMs?: number | null;
 
+  // When true, the request MUST carry caller auth via coreAuthHeader or coreApiKey.
+  // This is intended for user-bound HF -> Core gateway paths.
+  requirePassThroughAuth?: boolean | null;
+
   onCoreCall?: (line: CoreCallLogLine) => void;
   hfActor?: string | null;
 }>;
+
+type ParsedBody =
+  | { kind: "json"; value: any }
+  | { kind: "non_json"; text: string }
+  | { kind: "empty" }
+  | { kind: "invalid_json"; text: string };
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
@@ -56,6 +70,7 @@ export class CoreClientError extends Error {
   code?: string | null;
   requestId?: string | null;
   payload?: any;
+  detail?: unknown;
 
   constructor(message: string, opts: { status: number; code?: string | null; payload?: any }) {
     super(message);
@@ -64,6 +79,10 @@ export class CoreClientError extends Error {
     this.code = opts.code ?? null;
     this.requestId = opts?.payload?.request_id ?? null;
     this.payload = opts.payload;
+    this.detail =
+      opts?.payload?.detail ??
+      opts?.payload?.details ??
+      null;
   }
 }
 
@@ -77,7 +96,6 @@ async function readTextBounded(res: AnyResponse, maxBytes: number): Promise<stri
   const lim = Math.max(1024, Math.min(Number(maxBytes || 0) || 256_000, 10_000_000));
   const body: any = (res as any)?.body;
 
-  // Node 18+ fetch returns a web ReadableStream
   if (body && typeof body.getReader === "function") {
     const reader = body.getReader();
     const chunks: Uint8Array[] = [];
@@ -110,23 +128,28 @@ async function readTextBounded(res: AnyResponse, maxBytes: number): Promise<stri
     }
     return Buffer.concat(chunks.map((u) => Buffer.from(u)), total).toString("utf8");
   }
-  // Fallback: clip after read.
+
   const txt = await res.text().catch(() => "");
   if (!txt) return "";
   return txt.length > lim ? txt.slice(0, lim) : txt;
 }
 
-async function readJsonSafe(res: AnyResponse, maxBytes: number): Promise<any> {
-  const ct = res.headers.get("content-type") || "";
-  if (!ct.toLowerCase().includes("application/json")) {
-    const txt = await readTextBounded(res, maxBytes);
-    return { error: "non_json_response", message: txt?.slice?.(0, 500) ?? "" };
-  }
+async function readBodyParsed(res: AnyResponse, maxBytes: number): Promise<ParsedBody> {
+  const ct = String(res.headers.get("content-type") || "").toLowerCase();
   const raw = await readTextBounded(res, maxBytes);
+
+  if (!raw) {
+    return { kind: "empty" };
+  }
+
+  if (!ct.includes("application/json")) {
+    return { kind: "non_json", text: raw?.slice?.(0, 500) ?? "" };
+  }
+
   try {
-    return JSON.parse(raw);
+    return { kind: "json", value: JSON.parse(raw) };
   } catch {
-    return { error: "invalid_json" };
+    return { kind: "invalid_json", text: raw?.slice?.(0, 500) ?? "" };
   }
 }
 
@@ -156,11 +179,10 @@ export class CoreClient {
   }
 
   private async _request<T = any>(args: {
-    method: "GET" | "POST" | "HEAD";
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
     path: string;
     body?: Json | null;
     ctx?: CoreRequestCtx | undefined;
-    // Retries only for GET/HEAD, or POST when idempotencyKey is present.
     retry?: { maxRetries?: number } | null | undefined;
   }): Promise<T> {
     const url = joinUrl(this.baseUrl, args.path);
@@ -172,7 +194,7 @@ export class CoreClient {
     const canRetry =
       method === "GET" ||
       method === "HEAD" ||
-      (method === "POST" && Boolean(args?.ctx?.idempotencyKey));
+      ((method === "POST" || method === "PUT" || method === "PATCH") && Boolean(args?.ctx?.idempotencyKey));
 
     const attempts = canRetry ? 1 + maxRetries : 1;
 
@@ -184,24 +206,38 @@ export class CoreClient {
       const tTotal: TimeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        // Auth selection:
-        // - default: service key (CORE_SERVICE_API_KEY)
-        // - override: per-request header or api key for user pass-through
+        const hasPassThroughHeader = isNonEmptyString(args?.ctx?.coreAuthHeader);
+        const hasPassThroughApiKey = isNonEmptyString(args?.ctx?.coreApiKey);
+
+        if (args?.ctx?.requirePassThroughAuth === true && !hasPassThroughHeader && !hasPassThroughApiKey) {
+          throw new CoreClientError("pass_through_auth_required", {
+            status: 401,
+            code: "PASS_THROUGH_AUTH_REQUIRED",
+            payload: { request_id: null },
+          });
+        }
+
         const authHeader =
-          isNonEmptyString(args?.ctx?.coreAuthHeader)
-            ? String(args.ctx!.coreAuthHeader).trim()
-            : isNonEmptyString(args?.ctx?.coreApiKey)
-              ? `Bearer ${String(args.ctx!.coreApiKey).trim()}`
+          hasPassThroughHeader
+            ? String(args!.ctx!.coreAuthHeader).trim()
+            : hasPassThroughApiKey
+              ? `Bearer ${String(args!.ctx!.coreApiKey).trim()}`
               : `Bearer ${this.apiKey}`;
 
         const headers: Record<string, string> = {
           accept: "application/json",
-          "content-type": "application/json",
           authorization: authHeader,
           ...(args?.ctx?.requestId ? { "x-request-id": String(args.ctx.requestId) } : {}),
           ...(args?.ctx?.clientRequestId ? { "x-client-request-id": String(args.ctx.clientRequestId) } : {}),
           ...(args?.ctx?.idempotencyKey ? { "idempotency-key": String(args.ctx.idempotencyKey) } : {}),
+          ...(args?.ctx?.coreExtraHeaders && typeof args.ctx.coreExtraHeaders === "object"
+            ? args.ctx.coreExtraHeaders
+            : {}),
         };
+
+         if (method === "POST" || method === "PUT" || method === "PATCH") {
+          headers["content-type"] = "application/json";
+        }
 
         const init: RequestInit = {
           method,
@@ -209,12 +245,22 @@ export class CoreClient {
           signal: controller.signal,
         };
 
-        if (method === "POST") {
+        if (method === "POST" || method === "PUT" || method === "PATCH") {
           init.body = JSON.stringify(args.body ?? {});
         }
 
         const res: AnyResponse = await fetch(url, init);
-        const payload = await readJsonSafe(res, this.maxResponseBytes);
+        const parsed = await readBodyParsed(res, this.maxResponseBytes);
+
+        const payload =
+          parsed.kind === "json"
+            ? parsed.value
+            : parsed.kind === "empty"
+              ? {}
+            : parsed.kind === "non_json"
+              ? { error: "non_json_response", message: parsed.text }
+              : { error: "invalid_json", message: parsed.text };
+
         const coreReqId =
           (payload && typeof payload === "object" && (payload as any).request_id) ||
           res.headers.get("x-request-id") ||
@@ -239,13 +285,27 @@ export class CoreClient {
           });
         }
 
+        if (parsed.kind !== "json" && parsed.kind !== "empty") {
+          throw new CoreClientError("core_invalid_response", {
+            status: 502,
+            code: parsed.kind === "non_json" ? "UPSTREAM_NON_JSON" : "UPSTREAM_INVALID_JSON",
+            payload,
+          });
+        }
+
         return payload as T;
       } catch (e: any) {
         lastErr = e;
 
-        // Normalize timeouts/unreachable into stable errors
         if (e?.name === "AbortError") {
-          const err = new CoreClientError("core_timeout", { status: 504, payload: { request_id: null } });
+          const err = new CoreClientError("core_timeout", {
+            status: 504,
+            code: "CORE_TIMEOUT",
+            payload: {
+              request_id: null,
+              detail: { timeout_ms: timeoutMs },
+            },
+          });
           args?.ctx?.onCoreCall?.({
             hf_req_id: args?.ctx?.requestId ?? null,
             hf_actor: args?.ctx?.hfActor ?? null,
@@ -259,6 +319,7 @@ export class CoreClient {
         } else if (!(e instanceof CoreClientError)) {
           const err = new CoreClientError(e?.message || "core_unreachable", {
             status: 502,
+            code: "CORE_UNREACHABLE",
             payload: { request_id: null },
           });
           args?.ctx?.onCoreCall?.({
@@ -273,12 +334,10 @@ export class CoreClient {
           lastErr = err;
         }
 
-        // Retry only when allowed and only for transient-looking failures.
         if (attempt < attempts) {
           const status = lastErr instanceof CoreClientError ? lastErr.status : 0;
           const retryable = status === 502 || status === 503 || status === 504;
           if (retryable) {
-            // Deterministic backoff (no jitter): 250ms, 500ms, 1000ms, ...
             const delayMs = 250 * Math.pow(2, attempt - 1);
             await new Promise((r) => setTimeout(r, delayMs));
             continue;
@@ -294,12 +353,19 @@ export class CoreClient {
     throw lastErr ?? new CoreClientError("core_unreachable", { status: 502, payload: { request_id: null } });
   }
 
-  async get<T = any>(
+  async get<T = any>(path: string, ctx?: CoreRequestCtx, retry?: { maxRetries?: number } | null): Promise<T> {
+    const args: any = { method: "GET", path };
+    if (ctx != null) args.ctx = ctx;
+    if (retry != null) args.retry = retry;
+    return this._request<T>(args);
+  }
+
+  async delete<T = any>(
     path: string,
     ctx?: CoreRequestCtx,
     retry?: { maxRetries?: number } | null
   ): Promise<T> {
-    const args: any = { method: "GET", path };
+    const args: any = { method: "DELETE", path };
     if (ctx != null) args.ctx = ctx;
     if (retry != null) args.retry = retry;
     return this._request<T>(args);
@@ -308,21 +374,7 @@ export class CoreClient {
   async post<T = any>(
     path: string,
     body: Json,
-    ctx?: {
-      requestId?: string | null;
-      clientRequestId?: string | null;
-      idempotencyKey?: string | null;
-      onCoreCall?: (line: {
-        hf_req_id: string | null;
-        hf_actor: string | null;
-        core_path: string;
-        core_method: string;
-        core_status: number;
-        core_request_id: string | null;
-        attempt: number;
-      }) => void;
-      hfActor?: string | null;
-    },
+    ctx?: CoreRequestCtx,
     retry?: { maxRetries?: number } | null
   ): Promise<T> {
     const args: any = { method: "POST", path, body };
@@ -330,53 +382,41 @@ export class CoreClient {
     if (retry != null) args.retry = retry;
     return this._request<T>(args);
   }
+
+  async patch<T = any>(
+    path: string,
+    body: Json,
+    ctx?: CoreRequestCtx,
+    retry?: { maxRetries?: number } | null
+  ): Promise<T> {
+    const args: any = { method: "PATCH", path, body };
+    if (ctx != null) args.ctx = ctx;
+    if (retry != null) args.retry = retry;
+    return this._request<T>(args);
+  }
+
+  async put<T = any>(
+    path: string,
+    body: Json,
+    ctx?: CoreRequestCtx,
+    retry?: { maxRetries?: number } | null
+  ): Promise<T> {
+    const args: any = { method: "PUT", path, body };
+    if (ctx != null) args.ctx = ctx;
+    if (retry != null) args.retry = retry;
+    return this._request<T>(args);
+  }
 }
 
-// Convenience wrappers (onboarding) — keep call sites clean and typed.
 export function makeCoreOnboarding(core: CoreClient) {
   return {
-    checkEmail: (
-      email: string,
-      ctx?: CoreRequestCtx,
-    ) => core.post("/v1/onboarding/email/check", { email }, ctx),
+    checkEmail: (email: string, ctx?: CoreRequestCtx) =>
+      core.post("/v1/onboarding/email/check", { email }, ctx),
 
-    createOrg: (
-      payload: Json,
-      ctx?: {
-        requestId?: string | null;
-        clientRequestId?: string | null;
-        idempotencyKey?: string | null;
-        onCoreCall?: (line: {
-          hf_req_id: string | null;
-          hf_actor: string | null;
-          core_path: string;
-          core_method: string;
-          core_status: number;
-          core_request_id: string | null;
-          attempt: number;
-        }) => void;
-        hfActor?: string | null;
-      }
-    ) => core.post("/v1/onboarding/orgs", payload, ctx, { maxRetries: 0 }), 
+    createOrg: (payload: Json, ctx?: CoreRequestCtx) =>
+      core.post("/v1/onboarding/orgs", payload, ctx, { maxRetries: 0 }),
 
-    addMember: (
-      orgId: string,
-      payload: Json,
-      ctx?: {
-        requestId?: string | null;
-        clientRequestId?: string | null;
-        idempotencyKey?: string | null;
-        onCoreCall?: (line: {
-          hf_req_id: string | null;
-          hf_actor: string | null;
-          core_path: string;
-          core_method: string;
-          core_status: number;
-          core_request_id: string | null;
-          attempt: number;
-        }) => void;
-        hfActor?: string | null;
-      }
-    ) => core.post(`/v1/onboarding/orgs/${encodeURIComponent(orgId)}/members`, payload, ctx, { maxRetries: 0 }),
+    addMember: (orgId: string, payload: Json, ctx?: CoreRequestCtx) =>
+      core.post(`/v1/onboarding/orgs/${encodeURIComponent(orgId)}/members`, payload, ctx, { maxRetries: 0 }),
   };
 }

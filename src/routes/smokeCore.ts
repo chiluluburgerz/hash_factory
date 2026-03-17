@@ -23,6 +23,6 @@ export async function smokeCoreRoutes(app: FastifyInstance) {
       onCoreCall: (line) => req.log.info(line, "core_call"),
     });
 
-    reply.send({ ok: true, core: res });
+    return reply.send({ ok: true, core: res });
   });
 }

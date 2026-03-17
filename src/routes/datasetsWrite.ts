@@ -241,7 +241,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const body = requireBodyObject(req);
     try {
       const result = await datasets.upsertDataset(body, coreCtx(req, actor, true));
-      reply.code(201).send({ ok: true, result });
+      return reply.code(201).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -266,8 +266,14 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     }
 
     try {
-      const result = await datasets.ingestVersionFromArtifact(datasetKey, body, { setActive: q.setActive }, coreCtx(req, actor, true));
-      reply.code(201).send({ ok: true, result });
+      const result = await datasets.ingestVersionFromArtifact(
+        datasetKey,
+        body,
+        { setActive: q.setActive },
+        coreCtx(req, actor, true)
+      );
+      const status = result && typeof result === "object" && (result as any).reused === true ? 200 : 201;
+      return reply.code(status).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -279,8 +285,12 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const body = requireBodyObject(req);
     const datasetKey = String((req.params as any)?.datasetKey ?? "");
     try {
-      const result = await datasets.createVersionStrict(datasetKey, body, coreCtx(req, actor, true));
-      reply.code(201).send({ ok: true, result });
+      const safeBody = {
+        ...body,
+        ingest_source: "external_admin",
+      };
+      const result = await datasets.createVersionStrict(datasetKey, safeBody, coreCtx(req, actor, true));
+      return reply.code(201).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -293,7 +303,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const datasetKey = String((req.params as any)?.datasetKey ?? "");
     try {
       const result = await datasets.activateVersion(datasetKey, body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -306,7 +316,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const datasetKey = String((req.params as any)?.datasetKey ?? "");
     try {
       const result = await datasets.setVisibility(datasetKey, body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -319,7 +329,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const datasetKey = String((req.params as any)?.datasetKey ?? "");
     try {
       const result = await datasets.setDisabled(datasetKey, body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -332,7 +342,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const datasetKey = String((req.params as any)?.datasetKey ?? "");
     try {
       const result = await datasets.attachDatasetHcs(datasetKey, body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -346,7 +356,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const version = (req.params as any)?.version;
     try {
       const result = await datasets.attachVersionHcs(datasetKey, version, body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -359,7 +369,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const datasetKey = String((req.params as any)?.datasetKey ?? "");
     try {
       const result = await datasets.publishDatasetVersion(datasetKey, body, coreCtx(req, actor, true));
-      reply.code(201).send({ ok: true, result });
+      return reply.code(201).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -372,7 +382,7 @@ const datasetsWriteRoutes: FastifyPluginAsync<DatasetsWriteRoutesOpts> = async (
     const datasetVersionId = String((req.params as any)?.datasetVersionId ?? "");
     try {
       const result = await datasets.unpublishDatasetVersion(datasetVersionId, body, coreCtx(req, actor, true));
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result });
     } catch (e) {
       throw mapCoreError(e);
     }

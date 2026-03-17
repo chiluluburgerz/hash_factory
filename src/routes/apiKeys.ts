@@ -367,9 +367,16 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
       }
     }
 
+    if (out.expires_at == null && out.expires_in_days == null) {
+      const e: any = new Error("expiry_required");
+      e.statusCode = 400;
+      e.code = "EXPIRY_REQUIRED";
+      throw e;
+    }
+
     try {
       const result = await core.post(corePath("/api-keys"), out, coreCtx(req, actor, true, true));
-      reply.code(200).send(result);
+      return reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -392,9 +399,16 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
       throw e;
     }
 
+    if ((body as any).new_expires_at == null && (body as any).new_expires_in_days == null) {
+      const e: any = new Error("expiry_required");
+      e.statusCode = 400;
+      e.code = "EXPIRY_REQUIRED";
+      throw e;
+    }
+
     try {
       const result = await core.post(corePath("/api-keys/rotate"), body, coreCtx(req, actor, true, true));
-      reply.code(200).send(result);
+      return reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -418,7 +432,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     try {
       const qp = buildQuery({ limit, offset, includeDisabled });
       const result = await core.get(corePath(`/api-keys/my${qp}`), coreCtx(req, actor, false, true));
-      reply.code(200).send(result);
+      return reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -444,7 +458,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     try {
       const qp = buildQuery({ limit, offset, status, user_id: userId });
       const result = await core.get(corePath(`/api-keys/org${qp}`), coreCtx(req, actor, false, true));
-      reply.code(200).send(result);
+      return reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -470,7 +484,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     try {
       const qp = buildQuery({ limit, offset, status });
       const result = await core.get(corePath(`/api-keys/user/${encodeURIComponent(targetUserId)}${qp}`), coreCtx(req, actor, false, true));
-      reply.code(200).send(result);
+      return reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -493,7 +507,7 @@ export const apiKeysRoutes: FastifyPluginAsync<ApiKeysRoutesOpts> = async (app: 
     try {
       const qp = buildQuery({ includeDeleted });
       const result = await core.get(corePath(`/api-keys/${encodeURIComponent(id)}${qp}`), coreCtx(req, actor, false, true));
-      reply.code(200).send(result);
+      return reply.code(200).send(result);
     } catch (e) {
       throw mapCoreError(e);
     }

@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/ingest/receipt.ts
-// Version: 1.0-hf-ingest-receipt-v1 | 2026-03-06
+// Version: 1.1-hf-ingest-receipt-v1-root-anchor | 2026-03-14
 // Purpose:
 //   Deterministic receipt builder for generic ingest flows.
 // Notes:
@@ -49,7 +49,8 @@ export type IngestReceiptV1 = Readonly<{
   metadata?: Readonly<Record<string, unknown>>;
 
   core?: Readonly<{
-    anchor?: Readonly<Record<string, unknown>>;
+    receipt_anchor?: Readonly<Record<string, unknown>>;
+    root_anchor?: Readonly<Record<string, unknown>>;
   }>;
 }>;
 
@@ -61,33 +62,95 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
   return out as T;
 }
 
-function pickAnchorCore(core: unknown): Record<string, unknown> | undefined {
-  const src =
-    (core as any)?.anchor ??
-    core ??
-    null;
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
 
-  if (!src || typeof src !== "object") return undefined;
+function pick(obj: Record<string, unknown> | null | undefined, keys: readonly string[]): Record<string, unknown> | undefined {
+  if (!obj) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (obj[k] !== undefined) out[k] = obj[k];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function pickProjectedAnchor(src: unknown): Record<string, unknown> | undefined {
+  if (!isPlainObject(src)) return undefined;
+
+  const anchor = isPlainObject(src.anchor) ? src.anchor : src;
+  const publish = isPlainObject(src.publish) ? src.publish : null;
+  const certificate = isPlainObject(src.certificate) ? src.certificate : null;
 
   const projected = stripUndefined({
-    id: (src as any).id ?? undefined,
-    anchor_request_id: (src as any).anchor_request_id ?? (src as any).anchorRequestId ?? undefined,
-    domain: (src as any).domain ?? undefined,
-    payload_type: (src as any).payload_type ?? undefined,
-    proof_date: (src as any).proof_date ?? (src as any).proofDate ?? undefined,
-    status: (src as any).status ?? undefined,
-    root_id: (src as any).root_id ?? (src as any).rootId ?? undefined,
-    merkle_root: (src as any).merkle_root ?? undefined,
-    leaf_hash: (src as any).leaf_hash ?? undefined,
-    topic_id: (src as any).topic_id ?? undefined,
-    transaction_id: (src as any).transaction_id ?? undefined,
-    message_id: (src as any).message_id ?? undefined,
-    consensus_timestamp: (src as any).consensus_timestamp ?? undefined,
+    ...(pick(anchor, [
+      "id",
+      "proof_date",
+      "domain",
+      "anchor_kind",
+      "root_id",
+      "root_hash",
+      "payload_type",
+      "payload_hash",
+      "payload_bytes",
+      "leaf_id",
+      "leaf_hash",
+      "anchor_hash",
+      "hcs_topic_id",
+      "hcs_transaction_id",
+      "hcs_message_id",
+      "status",
+      "published_at",
+      "confirmed_at",
+      "created_at",
+      "updated_at",
+    ]) ?? {}),
+    ...(publish
+      ? {
+          publish: stripUndefined({
+            topic_key: publish.topic_key ?? undefined,
+            topic_name: publish.topic_name ?? undefined,
+            topic_id: publish.topic_id ?? publish.hcs_topic_id ?? undefined,
+            transaction_id: publish.transaction_id ?? publish.hcs_transaction_id ?? undefined,
+            message_id: publish.message_id ?? publish.hcs_message_id ?? undefined,
+            sequence_number: publish.sequence_number ?? undefined,
+          }),
+        }
+      : {}),
+    ...(certificate
+      ? {
+          certificate: stripUndefined({
+            attempted: Boolean(certificate.attempted),
+            skipped: Boolean(certificate.skipped),
+            issued: Boolean(certificate.issued),
+            deduped: Boolean(certificate.deduped),
+            ...(certificate.reason !== undefined ? { reason: certificate.reason } : {}),
+            ...(pick(
+              isPlainObject(certificate.nft) ? certificate.nft : null,
+              ["id", "nft_id", "token_id", "serial_number", "wallet_address", "status", "proof_date", "minted_at"]
+            )
+              ? {
+                  nft: pick(
+                    isPlainObject(certificate.nft) ? certificate.nft : null,
+                    ["id", "nft_id", "token_id", "serial_number", "wallet_address", "status", "proof_date", "minted_at"]
+                  ),
+                }
+              : {}),
+          }),
+        }
+      : {}),
   });
 
-  return Object.keys(projected).length > 0
-    ? projected
-    : undefined;
+  if (isPlainObject(projected.publish) && Object.keys(projected.publish).length === 0) {
+    delete (projected as any).publish;
+  }
+  if (isPlainObject(projected.certificate) && Object.keys(projected.certificate).length === 0) {
+    delete (projected as any).certificate;
+  }
+
+  return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
 export function buildIngestReceiptV1(opts: {
@@ -114,14 +177,20 @@ export function buildIngestReceiptV1(opts: {
     ordering: "deterministic_sort_v1" as const,
     merkle_rule: "dup_last_on_odd" as const,
   });
+
   const item_count = Number(bundle?.summary?.item_count ?? 0);
   const total_bytes = Number(bundle?.summary?.total_bytes ?? 0);
 
-  const core = opts.core
-    ? stripUndefined({
-        ...(pickAnchorCore(opts.core) ? { anchor: pickAnchorCore(opts.core) } : {}),
-      })
-    : undefined;
+  const receipt_anchor = pickProjectedAnchor((opts.core as any)?.receipt_anchor);
+  const root_anchor = pickProjectedAnchor((opts.core as any)?.root_anchor);
+
+  const core =
+    opts.core
+      ? stripUndefined({
+          ...(receipt_anchor ? { receipt_anchor } : {}),
+          ...(root_anchor ? { root_anchor } : {}),
+        })
+      : undefined;
 
   const body = stripUndefined({
     v: "v1" as const,

@@ -220,7 +220,7 @@ export const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOpts> = async 
     const email = (body as any).email;
 
     const out = await svc.checkEmailAvailability(email, actor, svc.ctxFromReq(req, actor, false));
-    reply.code(200).send({ ok: true, result: out });
+    return reply.code(200).send({ ok: true, result: out });
   });
 
   // POST /v1/onboarding/orgs
@@ -230,7 +230,7 @@ export const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOpts> = async 
     const body = requireBodyObject(req);
 
     const out = await svc.createOrganizationWithOwner(body as any, actor, svc.ctxFromReq(req, actor, true));
-    reply.code(201).send({ ok: true, result: out });
+    return reply.code(201).send({ ok: true, result: out });
   });
 
   // POST /v1/onboarding/orgs/:org_id/members
@@ -256,7 +256,7 @@ export const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOpts> = async 
     };
 
     const out = await svc.addMemberToOrganization(payload as any, actor, svc.ctxFromReq(req, actor, true));
-    reply.code(201).send({ ok: true, result: out });
+    return reply.code(201).send({ ok: true, result: out });
   });
 };
 

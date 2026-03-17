@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/services/onboardingService.ts
-// Version: 1.1-hash-factory-onboarding-service | 2026-02-18
+// Version: 1.2-hash-factory-onboarding-service-gateway-ctx | 2026-03-12
 // Purpose:
 //   Hash Factory OnboardingService (proxy + guard layer) -> Core Backend.
 //   - Performs strict runtime validation and DoS guards at the boundary
@@ -11,11 +11,17 @@
 // Notes:
 //   - Core remains the source of truth (RLS + constraints).
 //   - This service is a hardened façade and a stable contract for Hash Factory.
-// V1.1: Added assorted limits, guards, defense-in-depth improvements.
+// Changes (v1.2):
+//   - Uses shared gateway request-context builder
+//   - Switches to CoreRequestCtx
+//   - Adds 409 conflict mapping
+//   - Preserves service-key fallback for admin onboarding flows
 // ============================================================================
 
 import type { FastifyRequest } from "fastify";
 import { CoreClient, CoreClientError, makeCoreOnboarding } from "../core/coreClient.js";
+import type { CoreRequestCtx } from "../core/coreClient.js";
+import { buildGatewayCtx } from "../lib/gateway/requestContext.js";
 
 export type Actor = Readonly<{
   user_id?: string | null;
@@ -24,22 +30,6 @@ export type Actor = Readonly<{
   is_system_admin?: boolean | null;
   is_admin?: boolean | null;
   isAdmin?: boolean | null;
-}>;
-
-export type RequestCtx = Readonly<{
-  requestId?: string | null;
-  clientRequestId?: string | null;
-  idempotencyKey?: string | null;
-  hfActor?: string | null;
-  onCoreCall?: (line: {
-    hf_req_id: string | null;
-    hf_actor: string | null;
-    core_path: string;
-    core_method: string;
-    core_status: number;
-    core_request_id: string | null;
-    attempt: number;
-  }) => void;
 }>;
 
 export type OnboardingServiceOpts = Readonly<{
@@ -87,8 +77,9 @@ function bytesOfJson(value: unknown): number {
 
 function normalizeEmail(email: unknown): string {
   const s = String(email ?? "").trim().toLowerCase();
-  if (s.length < 6 || s.length > 255) throw new OnboardingError("invalid_email", { statusCode: 400, code: "INVALID_EMAIL" });
-  // Conservative sanity check (core does the real validation/uniqueness).
+  if (s.length < 6 || s.length > 255) {
+    throw new OnboardingError("invalid_email", { statusCode: 400, code: "INVALID_EMAIL" });
+  }
   if (!s.includes("@") || !s.includes(".")) {
     throw new OnboardingError("invalid_email", { statusCode: 400, code: "INVALID_EMAIL" });
   }
@@ -121,7 +112,10 @@ function normalizeWalletOrNull(wallet: unknown): string | null {
   return s.toLowerCase();
 }
 
-function normalizeRole(role: unknown, fallback: "viewer" | "editor" | "tenant_admin"): "viewer" | "editor" | "tenant_admin" {
+function normalizeRole(
+  role: unknown,
+  fallback: "viewer" | "editor" | "tenant_admin"
+): "viewer" | "editor" | "tenant_admin" {
   const s = String(role ?? "").trim();
   if (!s) return fallback;
   if (s !== "viewer" && s !== "editor" && s !== "tenant_admin") {
@@ -130,7 +124,10 @@ function normalizeRole(role: unknown, fallback: "viewer" | "editor" | "tenant_ad
   return s;
 }
 
-function normalizeStatus(status: unknown, fallback: "active" | "disabled"): "active" | "disabled" {
+function normalizeStatus(
+  status: unknown,
+  fallback: "active" | "disabled"
+): "active" | "disabled" {
   const s = String(status ?? "").trim();
   if (!s) return fallback;
   if (s !== "active" && s !== "disabled") {
@@ -162,11 +159,16 @@ function requireTenantAdminForOrgOrSystem(actor: Actor | null | undefined, orgId
   }
 }
 
-function sanitizeJsonObjectOrEmpty(v: unknown, maxBytes: number, name: string): Record<string, unknown> {
+function sanitizeJsonObjectOrEmpty(
+  v: unknown,
+  maxBytes: number,
+  name: string
+): Record<string, unknown> {
   if (v === null || v === undefined) return {};
-  if (!isPlainObject(v)) throw new OnboardingError(`invalid_${name}`, { statusCode: 400, code: "INVALID_METADATA" });
+  if (!isPlainObject(v)) {
+    throw new OnboardingError(`invalid_${name}`, { statusCode: 400, code: "INVALID_METADATA" });
+  }
 
-  // Prototype pollution defense (reject dangerous keys).
   for (const k of Object.keys(v)) {
     if (k === "__proto__" || k === "prototype" || k === "constructor") {
       throw new OnboardingError(`invalid_${name}`, { statusCode: 400, code: "INVALID_METADATA" });
@@ -174,7 +176,10 @@ function sanitizeJsonObjectOrEmpty(v: unknown, maxBytes: number, name: string): 
   }
 
   if (bytesOfJson(v) > maxBytes) {
-    throw new OnboardingError(`${name}_too_large`, { statusCode: 400, code: "METADATA_TOO_LARGE" });
+    throw new OnboardingError(`${name}_too_large`, {
+      statusCode: 400,
+      code: "METADATA_TOO_LARGE",
+    });
   }
 
   return v;
@@ -191,33 +196,6 @@ function redactPasswordDeep(v: unknown): unknown {
     out[k] = redactPasswordDeep(val);
   }
   return out;
-}
-
-function ctxFromReq(req: FastifyRequest): RequestCtx {
-  return {
-    requestId: (req as any)?.requestId ?? (req as any)?.id ?? null,
-    clientRequestId: (req as any)?.clientRequestId ?? null,
-  };
-}
-
-function idempotencyKeyFromReq(req: FastifyRequest): string | null {
-  const h = (req.headers as any) || {};
-  const raw = h["idempotency-key"] ?? h["x-idempotency-key"] ?? null;
-  if (raw == null) return null;
-  const v = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof v !== "string") return null;
-  const s = v.trim();
-  if (!s) return null;
-  return s.length > 256 ? s.slice(0, 256) : s;
-}
-
-function actorTag(actor: Actor | null | undefined): string | null {
-  if (!actor) return null;
-  const u = actor.user_id ? String(actor.user_id) : "";
-  const o = actor.org_id ? String(actor.org_id) : "";
-  const r = actor.org_role ? String(actor.org_role) : "";
-  if (!u && !o && !r) return null;
-  return `u:${u || "?"}|o:${o || "?"}|r:${r || "?"}`;
 }
 
 // ----------------------------------------------------------------------------
@@ -250,10 +228,13 @@ export class OnboardingService {
     if (!opts?.core) throw new Error("OnboardingService requires core client");
 
     this.coreOnboarding = makeCoreOnboarding(opts.core);
-    this.maxMetadataBytes = Math.max(1024, Math.min(Number(opts.maxMetadataBytes ?? 16 * 1024), 256 * 1024));
+    this.maxMetadataBytes = Math.max(
+      1024,
+      Math.min(Number(opts.maxMetadataBytes ?? 16 * 1024), 256 * 1024)
+    );
   }
 
-  async checkEmailAvailability(email: unknown, actor: Actor, ctx?: RequestCtx) {
+  async checkEmailAvailability(email: unknown, actor: Actor, ctx?: CoreRequestCtx) {
     requireSystemAdmin(actor);
     const em = normalizeEmail(email);
 
@@ -264,69 +245,117 @@ export class OnboardingService {
     }
   }
 
-  async createOrganizationWithOwner(input: CreateOrgWithOwnerInput, actor: Actor, ctx?: RequestCtx) {
+  async createOrganizationWithOwner(
+    input: CreateOrgWithOwnerInput,
+    actor: Actor,
+    ctx?: CoreRequestCtx
+  ) {
     requireSystemAdmin(actor);
-    if (!isPlainObject(input)) throw new OnboardingError("invalid_body", { statusCode: 400, code: "INVALID_BODY" });
+    if (!isPlainObject(input)) {
+      throw new OnboardingError("invalid_body", { statusCode: 400, code: "INVALID_BODY" });
+    }
 
     const orgIn = (input.organization ?? input.org) as unknown;
     const ownerIn = (input.owner ?? input.user) as unknown;
     const membershipIn = (input.membership ?? {}) as unknown;
 
-    if (!isPlainObject(orgIn)) throw new OnboardingError("invalid_org", { statusCode: 400, code: "INVALID_ORG" });
-    if (!isPlainObject(ownerIn)) throw new OnboardingError("invalid_owner", { statusCode: 400, code: "INVALID_OWNER" });
+    if (!isPlainObject(orgIn)) {
+      throw new OnboardingError("invalid_org", { statusCode: 400, code: "INVALID_ORG" });
+    }
+    if (!isPlainObject(ownerIn)) {
+      throw new OnboardingError("invalid_owner", { statusCode: 400, code: "INVALID_OWNER" });
+    }
     if (membershipIn != null && !isPlainObject(membershipIn)) {
-      throw new OnboardingError("invalid_membership", { statusCode: 400, code: "INVALID_MEMBERSHIP" });
+      throw new OnboardingError("invalid_membership", {
+        statusCode: 400,
+        code: "INVALID_MEMBERSHIP",
+      });
     }
 
     const passwordRaw = (ownerIn as any).password;
-    // Preserve exact password string; do not trim.
-    if (typeof passwordRaw !== "string" || passwordRaw.length < 8 || passwordRaw.length > 1024 || passwordRaw.includes("\u0000")) {
-      throw new OnboardingError("invalid_password", { statusCode: 400, code: "INVALID_PASSWORD" });
+    if (
+      typeof passwordRaw !== "string" ||
+      passwordRaw.length < 8 ||
+      passwordRaw.length > 1024 ||
+      passwordRaw.includes("\u0000")
+    ) {
+      throw new OnboardingError("invalid_password", {
+        statusCode: 400,
+        code: "INVALID_PASSWORD",
+      });
     }
 
     const organization = {
       name: normalizeName((orgIn as any).name),
       slug: normalizeSlugOrNull((orgIn as any).slug),
       email: normalizeEmail((orgIn as any).email),
-      wallet_address: normalizeWalletOrNull((orgIn as any).wallet_address ?? (orgIn as any).walletAddress),
-      description: (orgIn as any).description == null ? null : String((orgIn as any).description).trim().slice(0, 2000),
-      metadata: sanitizeJsonObjectOrEmpty((orgIn as any).metadata, this.maxMetadataBytes, "org_metadata"),
+      wallet_address: normalizeWalletOrNull(
+        (orgIn as any).wallet_address ?? (orgIn as any).walletAddress
+      ),
+      description:
+        (orgIn as any).description == null
+          ? null
+          : String((orgIn as any).description).trim().slice(0, 2000),
+      metadata: sanitizeJsonObjectOrEmpty(
+        (orgIn as any).metadata,
+        this.maxMetadataBytes,
+        "org_metadata"
+      ),
     };
 
     const owner = {
       name: normalizeName((ownerIn as any).name),
       slug: normalizeSlugOrNull((ownerIn as any).slug),
       email: normalizeEmail((ownerIn as any).email),
-      wallet_address: normalizeWalletOrNull((ownerIn as any).wallet_address ?? (ownerIn as any).walletAddress),
-      password: passwordRaw, // NEVER log / never return
-      metadata: sanitizeJsonObjectOrEmpty((ownerIn as any).metadata, this.maxMetadataBytes, "owner_metadata"),
+      wallet_address: normalizeWalletOrNull(
+        (ownerIn as any).wallet_address ?? (ownerIn as any).walletAddress
+      ),
+      password: passwordRaw,
+      metadata: sanitizeJsonObjectOrEmpty(
+        (ownerIn as any).metadata,
+        this.maxMetadataBytes,
+        "owner_metadata"
+      ),
       role: normalizeRole((ownerIn as any).role, "tenant_admin"),
     };
 
-    const membership = membershipIn == null ? {} : {
-      role: normalizeRole((membershipIn as any).role, "tenant_admin"),
-      status: normalizeStatus((membershipIn as any).status, "active"),
-      metadata: sanitizeJsonObjectOrEmpty((membershipIn as any).metadata, this.maxMetadataBytes, "membership_metadata"),
-    };
+    const membership =
+      membershipIn == null
+        ? {}
+        : {
+            role: normalizeRole((membershipIn as any).role, "tenant_admin"),
+            status: normalizeStatus((membershipIn as any).status, "active"),
+            metadata: sanitizeJsonObjectOrEmpty(
+              (membershipIn as any).metadata,
+              this.maxMetadataBytes,
+              "membership_metadata"
+            ),
+          };
 
     const payload = { organization, owner, membership };
 
     try {
       const result = await this.coreOnboarding.createOrg(payload as any, ctx);
-      // Defense-in-depth: ensure no password leaks from core responses.
       return redactPasswordDeep(result);
     } catch (e) {
       throw this.#mapCoreError(e);
     }
   }
 
-  async addMemberToOrganization(input: AddMemberInput, actor: Actor, ctx?: RequestCtx) {
-    if (!isPlainObject(input)) throw new OnboardingError("invalid_body", { statusCode: 400, code: "INVALID_BODY" });
+  async addMemberToOrganization(input: AddMemberInput, actor: Actor, ctx?: CoreRequestCtx) {
+    if (!isPlainObject(input)) {
+      throw new OnboardingError("invalid_body", { statusCode: 400, code: "INVALID_BODY" });
+    }
 
     const orgId = String((input as any).org_id ?? "").trim();
     const userId = String((input as any).user_id ?? "").trim();
-    if (!isUuid(orgId)) throw new OnboardingError("invalid_org_id", { statusCode: 400, code: "INVALID_ORG_ID" });
-    if (!isUuid(userId)) throw new OnboardingError("invalid_user_id", { statusCode: 400, code: "INVALID_USER_ID" });
+
+    if (!isUuid(orgId)) {
+      throw new OnboardingError("invalid_org_id", { statusCode: 400, code: "INVALID_ORG_ID" });
+    }
+    if (!isUuid(userId)) {
+      throw new OnboardingError("invalid_user_id", { statusCode: 400, code: "INVALID_USER_ID" });
+    }
 
     requireTenantAdminForOrgOrSystem(actor, orgId);
 
@@ -342,44 +371,49 @@ export class OnboardingService {
     };
 
     try {
-      return await this.coreOnboarding.addMember(orgId, payload as any, ctx);
+      const result = await this.coreOnboarding.addMember(orgId, payload as any, ctx);
+      return redactPasswordDeep(result);
     } catch (e) {
       throw this.#mapCoreError(e);
     }
   }
 
-  // Convenience: call from routes
-  ctxFromReq(req: FastifyRequest, actor?: Actor | null, forWrite: boolean = false): RequestCtx {
-    const base = ctxFromReq(req);
-    const hfActor = actorTag(actor);
-    const idempotencyKey = forWrite ? idempotencyKeyFromReq(req) : null;
-
-    return {
-      ...base,
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-     ...(hfActor ? { hfActor } : {}),
-      onCoreCall: (line) => {
-        const logger: any = (req as any).log ?? console;
-        logger.info({ event: "core_call", ...line }, "core_call");
-      },
-    };
+  ctxFromReq(req: FastifyRequest, actor?: Actor | null, forWrite: boolean = false): CoreRequestCtx {
+    return buildGatewayCtx(req, actor, {
+      forWrite,
+      requirePassThroughAuth: false,
+    });
   }
 
   #mapCoreError(err: unknown): Error {
     if (err instanceof OnboardingError) return err;
+
     if (err instanceof CoreClientError) {
       const status = err.status;
       const code = err.code || null;
 
-      // Map stable, safe boundary errors.
-      if (status === 400) return new OnboardingError("bad_request", { statusCode: 400, code: code ?? "BAD_REQUEST" });
-      if (status === 401) return new OnboardingError("unauthorized", { statusCode: 401, code: code ?? "AUTH_REQUIRED" });
-      if (status === 403) return new OnboardingError("forbidden", { statusCode: 403, code: code ?? "FORBIDDEN" });
-      if (status === 404) return new OnboardingError("not_found", { statusCode: 404, code: code ?? "NOT_FOUND" });
+      if (status === 400) {
+        return new OnboardingError("bad_request", { statusCode: 400, code: code ?? "BAD_REQUEST" });
+      }
+      if (status === 401) {
+        return new OnboardingError("unauthorized", { statusCode: 401, code: code ?? "AUTH_REQUIRED" });
+      }
+      if (status === 403) {
+        return new OnboardingError("forbidden", { statusCode: 403, code: code ?? "FORBIDDEN" });
+      }
+      if (status === 404) {
+        return new OnboardingError("not_found", { statusCode: 404, code: code ?? "NOT_FOUND" });
+      }
+      if (status === 409) {
+        return new OnboardingError("conflict", { statusCode: 409, code: code ?? "CONFLICT" });
+      }
 
-      // Upstream issue / other.
-      return new OnboardingError("upstream_error", { statusCode: 502, code: code ?? "UPSTREAM_ERROR" });
+      return new OnboardingError("upstream_error", {
+        statusCode: 502,
+        code: code ?? "UPSTREAM_ERROR",
+      });
     }
+
     return new OnboardingError("internal_error", { statusCode: 500, code: "INTERNAL_ERROR" });
   }
 }

@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/routes/merkleAnchorWrite.ts
-// Version: 1.0-hash-factory-merkle-anchor-write-routes | 2026-03-06
+// Version: 1.1-hash-factory-merkle-anchor-write-routes-shaped-timeouts | 2026-03-15
 // Purpose:
 //   Fastify "Merkle Anchor" WRITE routes for Hash Factory (proxy to Core).
 //   - /v1/merkle/anchor
@@ -15,6 +15,7 @@
 //     and topic routing.
 // ============================================================================
 
+import type HfEntitlements from "../lib/entitlements/hfOrgEntitlements.js";
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { CoreClientError } from "../core/coreClient.js";
 import {
@@ -115,6 +116,17 @@ function requireBodyObject(req: FastifyRequest): Record<string, unknown> {
   return body;
 }
 
+function requireTrustedRootId(body: Record<string, unknown>) {
+  const rootId = String(body?.rootId ?? "").trim();
+  if (rootId) return;
+
+  const e: any = new Error("invalid_request");
+  e.statusCode = 400;
+  e.code = "INVALID_REQUEST";
+  e.detail = { message: "rootId is required for trusted HF root anchor" };
+  throw e;
+}
+
 function extractIncomingAuthHeader(req: FastifyRequest): string | null {
   const authRaw = req.headers.authorization;
   const xRaw = (req.headers as any)["x-api-key"];
@@ -198,6 +210,15 @@ function coreCtx(req: FastifyRequest, actor: Actor | null, forWrite: boolean) {
 }
 
 function mapCoreError(err: unknown): Error {
+  if (err && typeof err === "object" && ("statusCode" in err || "code" in err)) {
+    const e: any = new Error((err as any).message || "request_failed");
+    e.statusCode = Number((err as any).statusCode ?? 500);
+    e.code = String((err as any).code ?? "INTERNAL_ERROR");
+    if ((err as any).detail !== undefined) e.detail = (err as any).detail;
+    if ((err as any).upstream_request_id !== undefined) e.upstream_request_id = (err as any).upstream_request_id;
+    if ((err as any).upstream_detail !== undefined) e.upstream_detail = (err as any).upstream_detail;
+    return e;
+  }
   if (err instanceof MerkleAnchorClientError) {
     const e: any = new Error(err.message || "upstream_error");
     const sc = Number(err.statusCode);
@@ -223,6 +244,180 @@ function mapCoreError(err: unknown): Error {
   return e;
 }
 
+function asPlainObject(v: unknown): Record<string, unknown> | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  return v as Record<string, unknown>;
+}
+
+function pick(obj: Record<string, unknown> | null, keys: string[]): Record<string, unknown> | null {
+  if (!obj) return null;
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (obj[k] !== undefined) out[k] = obj[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function shapeAnchor(anchorLike: unknown): Record<string, unknown> | null {
+  return pick(asPlainObject(anchorLike), [
+    "id",
+    "proof_date",
+    "domain",
+    "anchor_kind",
+    "root_id",
+    "root_hash",
+    "payload_type",
+    "payload_hash",
+    "payload_bytes",
+    "leaf_id",
+    "leaf_hash",
+    "anchor_hash",
+    "hcs_topic_id",
+    "hcs_transaction_id",
+    "hcs_message_id",
+    "status",
+    "published_at",
+    "confirmed_at",
+    "created_at",
+    "updated_at",
+  ]);
+}
+
+function shapeLeaf(leafLike: unknown): Record<string, unknown> | null {
+  return pick(asPlainObject(leafLike), ["leaf_id", "leaf_hash"]);
+}
+
+function shapePublish(publishLike: unknown, anchorLike?: unknown): Record<string, unknown> | null {
+  const publish = asPlainObject(publishLike);
+  const anchor = asPlainObject(anchorLike);
+
+  const topic_key = publish?.topic_key ?? null;
+  const topic_id =
+    publish?.topicId ??
+    publish?.topic_id ??
+    anchor?.hcs_topic_id ??
+    null;
+  const sequence_number =
+    publish?.sequenceNumber ??
+    publish?.sequence_number ??
+    null;
+  const transaction_id =
+    publish?.transactionId ??
+    publish?.transaction_id ??
+    anchor?.hcs_transaction_id ??
+    null;
+  const message_id =
+    publish?.messageId ??
+    publish?.message_id ??
+    anchor?.hcs_message_id ??
+    null;
+
+  if (!topic_key && !topic_id && !transaction_id && !message_id) return null;
+
+  return {
+    ...(topic_key ? { topic_key } : {}),
+    ...(topic_id ? { topic_id } : {}),
+    ...(sequence_number != null ? { sequence_number } : {}),
+    ...(transaction_id ? { transaction_id } : {}),
+    ...(message_id ? { message_id } : {}),
+  };
+}
+
+function shapeCertificate(certLike: unknown): Record<string, unknown> | null {
+  const cert = asPlainObject(certLike);
+  if (!cert) return null;
+
+  const nested = asPlainObject(cert.certificate);
+  const nft = asPlainObject(nested?.nft);
+  const token = asPlainObject(nested?.token);
+  const certificate = asPlainObject(nested?.certificate);
+
+  return {
+    attempted: Boolean(cert.attempted),
+    skipped: Boolean(cert.skipped),
+    issued: Boolean(cert.issued),
+    deduped: Boolean(cert.deduped),
+    reason:
+      cert.reason ??
+      nested?.reason ??
+      null,
+    nft: pick(nft, [
+      "id",
+      "nft_id",
+      "token_id",
+      "serial_number",
+      "wallet_address",
+      "status",
+      "proof_date",
+      "minted_at",
+      "hcs_topic_id",
+      "hcs_transaction_id",
+      "hts_transaction_id",
+    ]),
+    token: pick(token, [
+      "id",
+      "token_id",
+      "purpose",
+      "symbol",
+      "name",
+    ]),
+    certificate: pick(certificate, [
+      "nft_id",
+      "certificate_kind",
+      "token_purpose",
+      "proof_date",
+      "payload_hash",
+      "identity_hash",
+      "compact_metadata",
+    ]),
+  };
+}
+
+function shapePublicPublish(resultLike: unknown): Record<string, unknown> | null {
+  const result = asPlainObject(resultLike);
+  if (!result) return null;
+  const meta = asPlainObject(result.meta);
+  return {
+    ...(pick(result, [
+      "id",
+      "org_id",
+      "entity_kind",
+      "entity_id",
+      "proof_date",
+      "visibility",
+      "share_token",
+      "published_at",
+      "published_by",
+    ]) ?? {}),
+    ...(meta
+      ? {
+          meta: pick(meta, [
+            "domain",
+            "source",
+            "root_id",
+            "root_hash",
+            "anchor_hash",
+            "anchor_kind",
+          ]),
+        }
+      : {}),
+  };
+}
+
+function shapeAnchorResult(resultLike: unknown): Record<string, unknown> {
+  const result = asPlainObject(resultLike) ?? {};
+  const anchor = asPlainObject(result.anchor);
+  return {
+    ok: Boolean(result.ok),
+    deduped: Boolean(result.deduped),
+    queued_only: Boolean(result.queued_only),
+    anchor: shapeAnchor(result.anchor),
+    leaf: shapeLeaf(result.leaf),
+    publish: shapePublish(result.publish, anchor),
+    certificate: shapeCertificate(result.certificate),
+  };
+}
+
 function ensureNoStore(app: FastifyInstance) {
   app.addHook("onSend", async (req, reply, payload) => {
     const rp = String((req as any).routerPath ?? "");
@@ -239,11 +434,13 @@ function ensureNoStore(app: FastifyInstance) {
 
 export type MerkleAnchorWriteRoutesOpts = Readonly<{
   merkleAnchor: MerkleAnchorClient;
+  entitlements?: HfEntitlements | null;
 }>;
 
 const merkleAnchorWriteRoutes: FastifyPluginAsync<MerkleAnchorWriteRoutesOpts> = async (app, opts) => {
   if (!opts?.merkleAnchor) throw new Error("merkleAnchorWriteRoutes requires merkleAnchor client");
   const merkleAnchor = opts.merkleAnchor;
+  const entitlements = opts.entitlements ?? null;
 
   const requireAuth = app.requireAuth();
   ensureNoStore(app);
@@ -252,21 +449,38 @@ const merkleAnchorWriteRoutes: FastifyPluginAsync<MerkleAnchorWriteRoutesOpts> =
     const actor = requireActor(req);
     const body = requireBodyObject(req);
     try {
+      if (entitlements) {
+        await entitlements.requireMerkleAnchor(req, actor);
+      }
+
       const result = await merkleAnchor.anchorPayload(body, coreCtx(req, actor, true));
       const deduped = Boolean((result as any)?.deduped);
-      reply.code(deduped ? 200 : 201).send({ ok: true, result });
+      return reply.code(deduped ? 200 : 201).send({ ok: true, result: shapeAnchorResult(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
   });
 
+  // HF merkle root write is certificate-eligible trusted flow.
   app.post("/v1/merkle/anchor/root", { preHandler: requireAuth }, async (req, reply) => {
     const actor = requireActor(req);
     requireTenantAdminOrSystem(actor);
     const body = requireBodyObject(req);
+
     try {
-      const result = await merkleAnchor.requestRootAnchor(body, coreCtx(req, actor, true));
-      reply.code(201).send({ ok: true, result });
+      requireTrustedRootId(body);
+      if (entitlements) {
+        await entitlements.requireMerkleAnchor(req, actor);
+        await entitlements.requireMerkleRootAnchor(req, actor);
+      }
+
+      const result = await merkleAnchor.requestRootAnchor(
+        body,
+        coreCtx(req, actor, true)
+      );
+
+      const deduped = Boolean((result as any)?.deduped);
+      return reply.code(deduped ? 200 : 201).send({ ok: true, result: shapeAnchorResult(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -278,12 +492,17 @@ const merkleAnchorWriteRoutes: FastifyPluginAsync<MerkleAnchorWriteRoutesOpts> =
     const body = requireBodyObject(req);
     const anchorRequestId = String((req.params as any)?.anchorRequestId ?? "");
     try {
+      if (entitlements) {
+        await entitlements.requireMerkleAnchor(req, actor);
+        await entitlements.requireMerkleRootAnchor(req, actor);
+      }
+
       const result = await merkleAnchor.publishExistingAnchorRequest(
         anchorRequestId,
         body,
         coreCtx(req, actor, true)
       );
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result: shapeAnchorResult(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -295,12 +514,16 @@ const merkleAnchorWriteRoutes: FastifyPluginAsync<MerkleAnchorWriteRoutesOpts> =
     const body = requireBodyObject(req);
     const anchorRequestId = String((req.params as any)?.anchorRequestId ?? "");
     try {
+      if (entitlements) {
+        await entitlements.requireMerkleAnchor(req, actor);
+      }
+
       const result = await merkleAnchor.publishAnchorRequestPublic(
         anchorRequestId,
         body,
         coreCtx(req, actor, true)
       );
-      reply.code(201).send({ ok: true, result });
+      return reply.code(201).send({ ok: true, result: shapePublicPublish(result) });
     } catch (e) {
       throw mapCoreError(e);
     }
@@ -312,12 +535,16 @@ const merkleAnchorWriteRoutes: FastifyPluginAsync<MerkleAnchorWriteRoutesOpts> =
     const body = requireBodyObject(req);
     const anchorRequestId = String((req.params as any)?.anchorRequestId ?? "");
     try {
+      if (entitlements) {
+        await entitlements.requireMerkleAnchor(req, actor);
+      }
+
       const result = await merkleAnchor.unpublishAnchorRequestPublic(
         anchorRequestId,
         body,
         coreCtx(req, actor, true)
       );
-      reply.code(200).send({ ok: true, result });
+      return reply.code(200).send({ ok: true, result: shapePublicPublish(result) });
     } catch (e) {
       throw mapCoreError(e);
     }

@@ -140,6 +140,14 @@ function normalizeOptionalString(v: unknown, field: string, max = 256): string |
   return s;
 }
 
+function readEnvInt(name: string, def: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
 function clampInt(v: unknown, min: number, max: number, d: number): number {
   const n = Number(v);
   const i = Number.isFinite(n) ? Math.trunc(n) : d;
@@ -153,6 +161,18 @@ function buildQueryString(q: Record<string, string | number | boolean | null | u
     parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
   }
   return parts.length ? `?${parts.join("&")}` : "";
+}
+
+function buildMerkleWriteCtx(
+  ctx: CoreRequestCtx | undefined,
+  timeoutEnv: string,
+  timeoutDefaultMs: number
+): CoreRequestCtx {
+  const timeoutMs = readEnvInt(timeoutEnv, timeoutDefaultMs, 15_000, 300_000);
+  return {
+    ...(ctx || {}),
+    timeoutMs,
+  };
 }
 
 function mapCoreError(err: unknown): Error {
@@ -212,6 +232,14 @@ function mapCoreError(err: unknown): Error {
         requestId,
       });
     }
+    if (status === 504) {
+      return new MerkleClientError("gateway_timeout", {
+        statusCode: 504,
+        code: code ?? "GATEWAY_TIMEOUT",
+        detail,
+        requestId,
+      });
+    }
 
     return new MerkleClientError("upstream_error", {
       statusCode: 502,
@@ -252,6 +280,7 @@ export type MerkleClient = Readonly<{
     ctx?: CoreRequestCtx,
     retry?: { maxRetries?: number } | null
   ) => Promise<JsonObject>;
+  buildRoot: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   publishRoot: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   publishRootPublic: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   unpublishRootPublic: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
@@ -345,6 +374,45 @@ export function makeCoreMerkle(core: CoreClient): MerkleClient {
     }
   }
 
+  async function buildRoot(body: JsonObject, ctx?: CoreRequestCtx): Promise<JsonObject> {
+    try {
+      if (!isPlainObject(body)) {
+        throw new MerkleClientError("invalid_body", {
+          statusCode: 400,
+          code: "INVALID_BODY",
+        });
+      }
+
+      const proofDate = normalizeYmd(body.proofDate, "proof_date");
+      const domain = normalizeOptionalDomain(body.domain);
+
+      if (!proofDate || !domain) {
+        throw new MerkleClientError("invalid_request", {
+          statusCode: 400,
+          code: "INVALID_REQUEST",
+          detail: { message: "proofDate and domain are required" },
+        });
+      }
+
+      const payload: JsonObject = {
+        proofDate,
+        domain,
+      };
+
+      const effectiveCtx = buildMerkleWriteCtx(
+        ctx,
+        "HF_CORE_MERKLE_BUILD_TIMEOUT_MS",
+        60_000
+      );
+
+      const res = await core.post<any>("/v1/merkle/root/build", payload, effectiveCtx, { maxRetries: 0 });
+      const out = unwrapResult(res);
+      return out && typeof out === "object" ? (out as JsonObject) : {};
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  }
+
   async function publishRoot(body: JsonObject, ctx?: CoreRequestCtx): Promise<JsonObject> {
     try {
       if (!isPlainObject(body)) {
@@ -371,7 +439,13 @@ export function makeCoreMerkle(core: CoreClient): MerkleClient {
       if (proofDate) payload.proofDate = proofDate;
       if (domain) payload.domain = domain;
 
-      const res = await core.post<any>("/v1/merkle/root/publish", payload, ctx, { maxRetries: 0 });
+      const effectiveCtx = buildMerkleWriteCtx(
+        ctx,
+        "HF_CORE_MERKLE_PUBLISH_TIMEOUT_MS",
+        90_000
+      );
+
+      const res = await core.post<any>("/v1/merkle/root/publish", payload, effectiveCtx, { maxRetries: 0 });
       const out = unwrapResult(res);
       return out && typeof out === "object" ? (out as JsonObject) : {};
     } catch (e) {
@@ -478,7 +552,13 @@ export function makeCoreMerkle(core: CoreClient): MerkleClient {
         entityId,
       };
 
-      const res = await core.post<any>("/v1/merkle/proof/build-store", payload, ctx, { maxRetries: 0 });
+      const effectiveCtx = buildMerkleWriteCtx(
+        ctx,
+        "HF_CORE_MERKLE_PROOF_TIMEOUT_MS",
+        60_000
+      );
+
+      const res = await core.post<any>("/v1/merkle/proof/build-store", payload, effectiveCtx, { maxRetries: 0 });
       const out = unwrapResult(res);
       return out && typeof out === "object" ? (out as JsonObject) : {};
     } catch (e) {
@@ -491,6 +571,7 @@ export function makeCoreMerkle(core: CoreClient): MerkleClient {
     getTree,
     getProof,
     getProofByLeafHash,
+    buildRoot,
     publishRoot,
     publishRootPublic,
     unpublishRootPublic,

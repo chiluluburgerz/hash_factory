@@ -421,6 +421,11 @@ export function parseIngestExecuteRequestV1(body: unknown): IngestExecuteRequest
     throw new IngestValidationError("domain_required", { code: "SCHEMA_INVALID" });
   }
 
+  
+  if (mode === "register_and_anchor" && !proof_date) {
+    throw new IngestValidationError("proof_date_required", { code: "SCHEMA_INVALID" });
+  }
+
   return Object.freeze({
     mode,
     identity,
@@ -683,24 +688,42 @@ function parseReceiptAnchor(x: unknown): Readonly<{ domain?: string | null; proo
   });
 }
 
-function parseReceiptCore(x: unknown): Readonly<{ anchor?: Readonly<Record<string, unknown>> }> | undefined {
+function parseReceiptCore(
+  x: unknown
+): Readonly<{
+  receipt_anchor?: Readonly<Record<string, unknown>>;
+  root_anchor?: Readonly<Record<string, unknown>>;
+}> | undefined {
   if (x === undefined) return undefined;
   if (!isRecord(x)) {
     throw new IngestValidationError("receipt_core_invalid", { code: "SCHEMA_INVALID" });
   }
-  assertNoUnknownKeys(x, ["anchor"], "IngestReceiptV1.core");
-    const anchor =
-    x.anchor === undefined
+
+  assertNoUnknownKeys(x, ["receipt_anchor", "root_anchor"], "IngestReceiptV1.core");
+
+  const receipt_anchor =
+    x.receipt_anchor === undefined
       ? undefined
       : (() => {
-          if (!isRecord(x.anchor)) {
-            throw new IngestValidationError("receipt_core_anchor_invalid", { code: "SCHEMA_INVALID" });
+          if (!isRecord(x.receipt_anchor)) {
+            throw new IngestValidationError("receipt_core_receipt_anchor_invalid", { code: "SCHEMA_INVALID" });
           }
-          return sanitizeJsonValue(x.anchor) as Readonly<Record<string, unknown>>;
+          return sanitizeJsonValue(x.receipt_anchor) as Readonly<Record<string, unknown>>;
+        })();
+
+  const root_anchor =
+    x.root_anchor === undefined
+      ? undefined
+      : (() => {
+          if (!isRecord(x.root_anchor)) {
+            throw new IngestValidationError("receipt_core_root_anchor_invalid", { code: "SCHEMA_INVALID" });
+          }
+          return sanitizeJsonValue(x.root_anchor) as Readonly<Record<string, unknown>>;
         })();
 
   return Object.freeze({
-    ...(anchor !== undefined ? { anchor } : {}),
+    ...(receipt_anchor !== undefined ? { receipt_anchor } : {}),
+    ...(root_anchor !== undefined ? { root_anchor } : {}),
   });
 }
 
