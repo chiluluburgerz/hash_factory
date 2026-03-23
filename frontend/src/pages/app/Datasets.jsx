@@ -374,6 +374,20 @@ function DatasetTableRow({ row, expandedRowId, onToggleExpanded }) {
   const status = getDatasetStatus(row);
   const trust = getDatasetTrustState(row);
 
+  const itemsEstimate = pickFirstNumber(
+    row?.items_estimate,
+    row?.items_count_estimate,
+    row?.items_count,
+    row?.row_count
+  );
+
+  const bytesEstimate = pickFirstNumber(
+    row?.bytes_estimate,
+    row?.bytes_total_estimate,
+    row?.bytes_total,
+    row?.artifact_bytes
+  );
+
   const fingerprint =
     row?.dataset_fingerprint ||
     row?.fingerprint_hash ||
@@ -470,6 +484,12 @@ function DatasetTableRow({ row, expandedRowId, onToggleExpanded }) {
 
         <TableCell className="min-w-[120px]">
           <DatasetTrustBadge trust={trust} />
+        </TableCell>
+
+        <TableCell className="min-w-[150px]">
+          <div className="text-sm text-foreground/85">
+            {bytesEstimate != null ? `${Number(bytesEstimate).toLocaleString()} bytes` : "Bytes n/a"}
+          </div>
         </TableCell>
 
         <TableCell className="min-w-[140px]">
@@ -760,6 +780,7 @@ export default function DatasetsPage() {
                   <TableHead>Visibility</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Trust</TableHead>
+                  <TableHead>Size</TableHead>
                   <TableHead>Updated</TableHead>
                 </TableRow>
               </TableHeader>
