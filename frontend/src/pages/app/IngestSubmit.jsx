@@ -827,6 +827,17 @@ export default function IngestSubmitPage() {
           </div>
         </div>
 
+        <div className="mt-4 rounded-2xl border border-border/60 bg-card/25 p-4">
+            <div className="text-sm font-semibold text-foreground/90">New to local-first submit?</div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Use <code className="rounded bg-card/50 px-1 py-0.5 font-mono text-xs">hf-local</code> to
+              hash and package evidence on your machine before submitting here. Raw data never leaves your machine.
+            </p>
+            <pre className="mt-3 rounded-xl bg-card/40 px-4 py-3 font-mono text-sm text-foreground/80">npm install hf-local</pre>
+          </div>
+
+           <div className="mt-4 flex flex-wrap gap-2"></div>
+
         <div className="mt-4 flex flex-wrap gap-2">
           <Badge variant={posture.canUseIngest ? "success" : "warn"}>
             ingest {posture.canUseIngest ? "enabled" : "restricted"}

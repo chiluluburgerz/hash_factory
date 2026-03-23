@@ -1,11 +1,11 @@
 {
-  "name": "@vera-anchor/hf-local",
+  "name": "hf-local",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "license": "MIT AND Commons-Clause",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -21,7 +21,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
