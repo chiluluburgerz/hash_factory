@@ -1,5 +1,5 @@
 const HF_API_KEY_STORAGE_KEY = "hf_user_api_key";
-const HF_API_PREFIX = "/hf";
+const HF_API_BASE = import.meta.env.VITE_HF_API_BASE ?? "";
 
 export function getStoredApiKey() {
   try {
@@ -28,8 +28,8 @@ export function clearStoredApiKey() {
 
 export function hfPath(path) {
   const raw = String(path || "").trim();
-  if (!raw) return HF_API_PREFIX;
-  return raw.startsWith("/") ? `${HF_API_PREFIX}${raw}` : `${HF_API_PREFIX}/${raw}`;
+  const suffix = raw.startsWith("/") ? raw : `/${raw}`;
+  return `${HF_API_BASE}${suffix}`;
 }
 
 function buildHttpError(message, meta = {}) {
