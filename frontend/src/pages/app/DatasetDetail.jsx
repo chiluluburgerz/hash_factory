@@ -869,18 +869,6 @@ export default function DatasetDetailPage() {
                         value: certificateNft?.global_hash || "—",
                         mono: true,
                       },
-                      {
-                        key: "payload_hash",
-                        label: "Payload hash",
-                        value: certificatePayload?.payload_hash || "—",
-                        mono: true,
-                      },
-                      {
-                        key: "identity_hash",
-                        label: "Identity hash",
-                        value: certificatePayload?.identity_hash || "—",
-                        mono: true,
-                      },
                       { key: "proof_date_hash", label: "Proof date", value: certificateProofDate || "—" },
                     ]}
                   />
