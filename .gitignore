@@ -8,3 +8,10 @@ coverage
 *.log
 *.json
 EOF
+
+# But keep important config files
+!package.json
+!**/package.json
+!tsconfig.json
+!**/tsconfig.json
+!**/cors.json
