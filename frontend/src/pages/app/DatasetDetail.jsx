@@ -307,20 +307,6 @@ function buildDatasetCertificateLookup(bundle) {
   };
 }
 
-function summarizePublicationState(publishedDataset, publishedVersion) {
-  const datasetVisible = Boolean(
-    publishedDataset?.entity_id || publishedDataset?.proof_date || publishedDataset?.created_at
-  );
-  const versionVisible = Boolean(
-    publishedVersion?.entity_id || publishedVersion?.proof_date || publishedVersion?.created_at
-  );
-
-  if (datasetVisible && versionVisible) return "Dataset and active version are published.";
-  if (datasetVisible) return "Dataset-level publication is visible.";
-  if (versionVisible) return "Active version publication is visible.";
-  return "No publication payload is currently visible.";
-}
-
 export default function DatasetDetailPage() {
   const { datasetKey } = useParams();
 
@@ -511,9 +497,6 @@ export default function DatasetDetailPage() {
   const updatedAt = pickFirstValue(dataset?.updated_at, manifest?.updated_at);
   const sealedAt = pickFirstValue(activeVersion?.sealed_at, dataset?.sealed_at);
 
-  const publishedDataset = published?.published?.dataset || {};
-  const publishedVersion = published?.published?.dataset_version || {};
-
   const certificateIssued = Boolean(
     resolvedCertificateExists ||
       resolvedCertificate?.nft_id ||
@@ -547,8 +530,6 @@ export default function DatasetDetailPage() {
         : visibility === "private"
           ? Lock
           : Database;
-
-  const publicationSummary = summarizePublicationState(publishedDataset, publishedVersion);
 
   return (
     <div className="space-y-6">
@@ -790,33 +771,6 @@ export default function DatasetDetailPage() {
                     value: versionHcsMessageId,
                     mono: true,
                   },
-                ]}
-              />
-            </div>
-          </EntitySection>
-
-          <EntitySection
-            title="Publication"
-            description="Visible publication state for this dataset and its active version."
-          >
-            <div className="grid gap-6 lg:grid-cols-2">
-              <EntityKeyValueGrid
-                title="Dataset publication"
-                items={[
-                  { key: "dataset_entity_id", label: "Entity id", value: publishedDataset?.entity_id || "—", mono: true },
-                  { key: "dataset_proof_date", label: "Proof date", value: publishedDataset?.proof_date || "—" },
-                  { key: "dataset_visibility", label: "Visibility", value: publishedDataset?.visibility || "—" },
-                  { key: "dataset_created_at", label: "Created at", value: formatDateTime(publishedDataset?.created_at) },
-                ]}
-              />
-
-              <EntityKeyValueGrid
-                title="Active version publication"
-                items={[
-                  { key: "version_entity_id", label: "Entity id", value: publishedVersion?.entity_id || "—", mono: true },
-                  { key: "version_proof_date", label: "Proof date", value: publishedVersion?.proof_date || "—" },
-                  { key: "version_visibility", label: "Visibility", value: publishedVersion?.visibility || "—" },
-                  { key: "version_created_at", label: "Created at", value: formatDateTime(publishedVersion?.created_at) },
                 ]}
               />
             </div>
