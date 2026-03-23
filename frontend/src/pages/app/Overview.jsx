@@ -90,8 +90,8 @@ export default function OverviewPage() {
             Overview
           </h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
-            Your Hash Factory control plane — ingest, anchor, verify, and manage your evidence workflows.
-          </p>
+            Your Hash Factory control plane. Seamlessly ingest, anchor, verify, and manage your evidence workflows.
+          </p> 
         </div>
 
         <Button type="button" variant="outline" onClick={() => void refreshAppContext()}>
