@@ -152,7 +152,7 @@ export default function ApiKeyGate({ onAuthenticated }) {
               <form onSubmit={submit} className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground/90">
-                    User API key
+                    User API key 
                   </label>
                   <textarea
                     value={value}
