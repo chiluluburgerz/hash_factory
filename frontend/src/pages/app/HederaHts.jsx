@@ -153,8 +153,6 @@ function HtsRow({ row }) {
   const createdAt = htsCreatedAtOf(row);
   const mirrorVerified = htsMirrorVerified(row);
   const status = htsStatusOf(row);
-  const symbol = htsSymbolOf(row);
-  const name = htsNameOf(row);
   const serial = htsSerialOf(row);
   const title = htsTitleOf(row, "HTS transaction");
 
@@ -218,32 +216,14 @@ function HtsRow({ row }) {
               </div>
             </div>
 
-            {name || symbol || serial != null ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl border border-border/60 bg-card/25 p-3">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Token name
-                  </div>
-                  <div className="mt-1 text-sm text-foreground/90">
-                    {name || "—"}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-border/60 bg-card/25 p-3">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Token symbol
-                  </div>
-                  <div className="mt-1 text-sm text-foreground/90">
-                    {symbol || "—"}
-                  </div>
-                </div>
-
+            {serial != null ? (
+              <div className="grid gap-3 sm:grid-cols-1" style={{ maxWidth: "200px" }}>
                 <div className="rounded-xl border border-border/60 bg-card/25 p-3">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     Serial number
                   </div>
                   <div className="mt-1 text-sm text-foreground/90">
-                    {serial != null ? serial.toLocaleString() : "—"}
+                    {serial.toLocaleString()}
                   </div>
                 </div>
               </div>
