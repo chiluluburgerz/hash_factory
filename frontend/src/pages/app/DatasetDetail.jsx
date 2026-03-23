@@ -946,46 +946,6 @@ export default function DatasetDetailPage() {
               </div>
             </div>
           </EntitySection>
-
-          <EntitySection
-            title="Current dataset posture"
-            description="How this dataset fits into the current HF product model."
-          >
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-                  <FolderUp className="h-4 w-4" />
-                  Managed guided flow
-                </div>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Guided anchor is the managed path for demos, operator-assisted runs, and early
-                  partner onboarding where HF can access the dataset root directly.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-                  <Package className="h-4 w-4" />
-                  Local-first bridge
-                </div>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Local-first submit is the bridge for users who compute deterministic evidence
-                  outside HF and then finalize anchored registry state through the platform.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-                  <ScrollText className="h-4 w-4" />
-                  Inspection surface
-                </div>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  This detail page is where users review identity, trust state, publication posture,
-                  and certificate output after either workflow completes.
-                </p>
-              </div>
-            </div>
-          </EntitySection>
         </>
       )}
     </div>
