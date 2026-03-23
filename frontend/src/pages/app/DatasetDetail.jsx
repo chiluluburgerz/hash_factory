@@ -896,48 +896,6 @@ export default function DatasetDetailPage() {
           </EntitySection>
 
           <EntitySection
-            title="Metadata and raw structures"
-            description="Lower-level payloads visible to the current authenticated actor."
-          >
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Dataset metadata
-                </div>
-                <JsonBlock value={dataset?.metadata} emptyLabel="No dataset metadata" />
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Metadata schema
-                </div>
-                <JsonBlock
-                  value={pickFirstObject(
-                    activeVersion?.metadata_schema,
-                    dataset?.metadata_schema,
-                    manifest?.metadata_schema
-                  )}
-                  emptyLabel="No metadata schema"
-                />
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Publication payload
-                </div>
-                <JsonBlock value={published} emptyLabel="No publication payload" />
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Legacy embedded certificate payload
-                </div>
-                <JsonBlock value={certificate} emptyLabel="No embedded certificate payload" />
-              </div>
-            </div>
-          </EntitySection>
-
-          <EntitySection
             title="What this page tells you"
             description="This is the inspection surface for a single dataset record."
           >
