@@ -158,7 +158,13 @@ async function buildApp(): Promise<FastifyInstance> {
     origin: corsOrigin,
     credentials: corsCreds,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-API-Key",
+      "Cache-Control",
+      "Pragma",
+    ],
     maxAge: 600,
   };
 
