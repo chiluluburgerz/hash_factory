@@ -9,7 +9,9 @@ import {
   KeyRound,
   Building2,
   ShieldCheck,
-  Activity,
+  UserRound,
+  Waypoints,
+  CheckCircle2,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -17,7 +19,7 @@ import { Badge } from "@/components/base/badge";
 import useAppContext from "@/app/hooks/useAppContext.js";
 
 const navItemBase =
-  "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors";
+  "group flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors";
 const navItemInactive =
   "text-muted-foreground hover:bg-accent/60 hover:text-foreground";
 const navItemActive =
@@ -42,19 +44,32 @@ export default function AppSidebar() {
     membership,
     entitlements,
     primaryWallet,
+    setup,
   } = useAppContext();
 
+  const setupBlockingCount = Number(setup?.blockingCount ?? 0);
+  const setupNeedsAttention = !isLoading && !setup?.isReady;
+
   const links = [
+    {
+      to: "/app/setup",
+      label: "Setup",
+      icon: CheckCircle2,
+      show: setupNeedsAttention,
+      badge: setupNeedsAttention ? String(setupBlockingCount) : null,
+      badgeVariant: "warn",
+    },
     { to: "/app/overview", label: "Overview", icon: LayoutGrid, show: true },
     { to: "/app/ingest", label: "Ingest", icon: FlaskConical, show: true },
     { to: "/app/datasets", label: "Datasets", icon: Database, show: true },
     { to: "/app/certificates", label: "Certificates", icon: ScrollText, show: true },
+    { to: "/app/hedera", label: "Hedera", icon: Waypoints, show: true },
     { to: "/app/wallets", label: "Wallets", icon: Wallet, show: true },
-    { to: "/app/api-keys", label: "API Keys", icon: KeyRound, show: !!entitlements?.canManageApiKeys },
+    { to: "/app/keys", label: "Keys", icon: KeyRound, show: !!entitlements?.canManageApiKeys },
     { to: "/app/org", label: "Org", icon: Building2, show: true },
     { to: "/app/org/members", label: "Members", icon: Building2, show: !!entitlements?.canManageOrg },
+    { to: "/app/profile", label: "Profile", icon: UserRound, show: true },
     { to: "/app/verify", label: "Verification", icon: ShieldCheck, show: true },
-    { to: "/app/activity", label: "Activity", icon: Activity, show: true },
   ].filter((x) => x.show);
 
   return (
@@ -87,6 +102,11 @@ export default function AppSidebar() {
               <Badge variant="outline">
                 tier <span className="ml-1 font-mono">{entitlements?.tier || "—"}</span>
               </Badge>
+              {setupNeedsAttention ? (
+                <Badge variant="warn">
+                  setup <span className="ml-1 font-mono">action needed</span>
+                </Badge>
+              ) : null}
             </div>
 
             <div>
@@ -111,8 +131,14 @@ export default function AppSidebar() {
                   cn(navItemBase, isActive ? navItemActive : navItemInactive)
                 }
               >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span>{link.label}</span>
+                <span className="flex min-w-0 items-center gap-3">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span>{link.label}</span>
+                </span>
+
+                {link.badge ? (
+                  <Badge variant={link.badgeVariant || "outline"}>{link.badge}</Badge>
+                ) : null}
               </NavLink>
             );
           })}

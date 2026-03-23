@@ -134,6 +134,20 @@ function parseScopesInput(raw) {
   );
 }
 
+function parseExpiryDays(raw, { min = 1, max = 365 } = {}) {
+  const value = String(raw || "").trim();
+  if (!value) {
+    throw new Error("Expiry is required.");
+  }
+
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < min || num > max) {
+    throw new Error(`Expiry must be an integer between ${min} and ${max} days.`);
+  }
+
+  return num;
+}
+
 function stringifyScopes(scopes) {
   return Array.isArray(scopes) ? scopes.join("\n") : "";
 }
@@ -280,7 +294,7 @@ function RotateApiKeyCard({
           <input
             type="number"
             min="1"
-            max="3650"
+            max="365"
             value={form.expiresInDays}
             onChange={(e) => onChange("expiresInDays", e.target.value)}
             placeholder="90"
@@ -362,6 +376,7 @@ export default function ApiKeyDetailPage() {
   const [actionBusy, setActionBusy] = React.useState("");
   const [revealedSecret, setRevealedSecret] = React.useState("");
   const [revealedSecretLabel, setRevealedSecretLabel] = React.useState("API key rotated");
+  const [armedAction, setArmedAction] = React.useState("");
 
   const [rotateState, setRotateState] = React.useState({
     open: false,
@@ -379,6 +394,7 @@ export default function ApiKeyDetailPage() {
   const loadApiKey = React.useCallback(async () => {
     setIsLoading(true);
     setPageError("");
+    setArmedAction("");
 
     try {
       const payload = await fetchJsonOrThrow(`/api-keys/${encodeURIComponent(apiKeyId || "")}`);
@@ -403,6 +419,7 @@ export default function ApiKeyDetailPage() {
 
   function openRotate() {
     if (!apiKey) return;
+    setArmedAction("");
     setRotateState({
       open: true,
       busy: false,
@@ -430,6 +447,7 @@ export default function ApiKeyDetailPage() {
         useForSession: false,
       },
     });
+    setArmedAction("");
   }
 
   function updateRotateForm(field, value) {
@@ -462,12 +480,15 @@ export default function ApiKeyDetailPage() {
         throw new Error("A maximum of 32 scopes is allowed.");
       }
 
-      const expiresInDays = String(rotateState.form.expiresInDays || "").trim();
+      const expiresInDays = parseExpiryDays(rotateState.form.expiresInDays, {
+        min: 1,
+        max: 365,
+      });
 
       const body = {
         old_api_key_id: apiKey.id,
         ...(rotateState.form.keyHint.trim() ? { new_key_hint: rotateState.form.keyHint.trim() } : {}),
-        ...(expiresInDays ? { new_expires_in_days: Number(expiresInDays) } : {}),
+        new_expires_in_days: expiresInDays,
         new_scopes: scopes,
         disable_old: Boolean(rotateState.form.disableOld),
       };
@@ -528,6 +549,8 @@ export default function ApiKeyDetailPage() {
       }
 
       await loadApiKey();
+      setActionBusy("");
+      setArmedAction("");
     } catch (err) {
       setPageError(err?.message || `Failed to ${action} API key.`);
       setActionBusy("");
@@ -688,39 +711,105 @@ export default function ApiKeyDetailPage() {
               ) : null}
 
               {canDisable ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={actionBusy === "disable"}
-                  onClick={() => void runLifecycleAction("disable")}
-                >
-                  <ShieldOff className="mr-2 h-4 w-4" />
-                  {actionBusy === "disable" ? "Disabling..." : "Disable"}
-                </Button>
+                armedAction === "disable" ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={actionBusy === "disable"}
+                      onClick={() => void runLifecycleAction("disable")}
+                    >
+                      <ShieldOff className="mr-2 h-4 w-4" />
+                      {actionBusy === "disable" ? "Disabling..." : "Confirm disable"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={Boolean(actionBusy)}
+                      onClick={() => setArmedAction("")}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={Boolean(actionBusy)}
+                    onClick={() => setArmedAction("disable")}
+                  >
+                    <ShieldOff className="mr-2 h-4 w-4" />
+                    Disable
+                  </Button>
+                )
               ) : null}
 
               {canEnable ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={actionBusy === "enable"}
-                  onClick={() => void runLifecycleAction("enable")}
-                >
-                  <ShieldCheck className="mr-2 h-4 w-4" />
-                  {actionBusy === "enable" ? "Enabling..." : "Enable"}
-                </Button>
+                armedAction === "enable" ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={actionBusy === "enable"}
+                      onClick={() => void runLifecycleAction("enable")}
+                    >
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      {actionBusy === "enable" ? "Enabling..." : "Confirm enable"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={Boolean(actionBusy)}
+                      onClick={() => setArmedAction("")}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                 <Button
+                    type="button"
+                    variant="outline"
+                    disabled={Boolean(actionBusy)}
+                    onClick={() => setArmedAction("enable")}
+                  >
+                    <ShieldCheck className="mr-2 h-4 w-4" />
+                    Enable
+                  </Button>
+                )
               ) : null}
 
               {canRevoke ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={actionBusy === "revoke"}
-                  onClick={() => void runLifecycleAction("revoke")}
-                >
-                  <Ban className="mr-2 h-4 w-4" />
-                  {actionBusy === "revoke" ? "Revoking..." : "Revoke"}
-                </Button>
+                armedAction === "revoke" ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={actionBusy === "revoke"}
+                      onClick={() => void runLifecycleAction("revoke")}
+                    >
+                      <Ban className="mr-2 h-4 w-4" />
+                      {actionBusy === "revoke" ? "Revoking..." : "Confirm revoke"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={Boolean(actionBusy)}
+                      onClick={() => setArmedAction("")}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={Boolean(actionBusy)}
+                    onClick={() => setArmedAction("revoke")}
+                  >
+                    <Ban className="mr-2 h-4 w-4" />
+                    Revoke
+                  </Button>
+                )
               ) : null}
 
               <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>

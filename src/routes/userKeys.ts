@@ -20,6 +20,7 @@
 // Routes:
 //   GET  /user-keys/me/public
 //   GET  /user-keys/me/history?limit&offset&includeDeleted
+//   GET  /user-keys/:user_id/versions/:key_version
 //   GET  /user-keys/:user_id/public
 //   GET  /user-keys/:user_id/history?limit&offset&includeDeleted
 //   POST /user-keys/:user_id/generate   { key_type?, metadata? }
@@ -440,10 +441,21 @@ function normalizeHistoryQuery(req: FastifyRequest): { limit: number; offset: nu
   return { limit, offset, includeDeleted };
 }
 
-function normalizeKeyTypeOrDefault(v: unknown): "rsa-2048" | "rsa-4096" | "ecdsa-p256" | "ecdsa-p384" {
+function normalizeKeyVersion(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 2_147_483_647) {
+    const e: any = new Error("invalid_key_version");
+    e.statusCode = 400;
+    e.code = "INVALID_KEY_VERSION";
+    throw e;
+  }
+  return Math.trunc(n);
+}
+
+function normalizeKeyTypeOrDefault(v: unknown): "rsa-2048" | "rsa-4096" {
   const s = String(v ?? "").trim();
   if (!s) return "rsa-2048";
-  if (s === "rsa-2048" || s === "rsa-4096" || s === "ecdsa-p256" || s === "ecdsa-p384") return s;
+  if (s === "rsa-2048" || s === "rsa-4096") return s;
   const e: any = new Error("invalid_key_type");
   e.statusCode = 400;
   e.code = "INVALID_KEY_TYPE";
@@ -538,6 +550,37 @@ export const userKeysRoutes: FastifyPluginAsync<UserKeysRoutesOpts> = async (app
     try {
       const result = await userKeys.getMeHistory(
         q,
+        coreCtx(req, actor, false, true),
+        { maxRetries: 1 }
+      );
+      return reply.code(200).send({ ok: true, result: scrubSecrets(result) });
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  });
+
+  app.get("/user-keys/:user_id/versions/:key_version", { preHandler: requireAuth }, async (req, reply) => {
+    if (!enforce(limRead, rlKey(req, "user-keys:user:version"), req, reply)) return reply;
+
+    const actor = requireActor(req);
+    requireAnyScope(actor, ["user_keys:read"]);
+
+    const userId = String((req.params as any)?.user_id ?? "").trim();
+    if (!isUuid(userId)) {
+      const e: any = new Error("invalid_user_id");
+      e.statusCode = 400;
+      e.code = "INVALID_USER_ID";
+      throw e;
+    }
+
+    const keyVersion = normalizeKeyVersion((req.params as any)?.key_version);
+
+    requireSelfOrTenantAdmin(actor, userId);
+
+    try {
+      const result = await userKeys.getUserKeyVersion(
+        userId,
+        keyVersion,
         coreCtx(req, actor, false, true),
         { maxRetries: 1 }
       );

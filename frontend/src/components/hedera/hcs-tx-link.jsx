@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { ExternalLink } from "lucide-react";
 import { buildHcsLink } from "@/lib/hcs.js";
 import CopyIconButton from "@/components/base/copy-icon-button";
+import { hcsDetailPath } from "@/components/hedera/hedera-ui-helpers.js";
 import { cn } from "@/lib/utils";
 
 export function HcsTxLabel({
@@ -88,12 +89,12 @@ export function HcsTxDetailsLink({ id }) {
   const raw = String(id || "").trim();
   if (!raw) return <span className="text-muted-foreground">Not present</span>;
 
+  const isTransactionId =
+    /^\d+\.\d+\.\d+@\d+\.\d+$/.test(raw) || /^(\d+\.\d+\.\d+)@(\d+)-(\d+)$/.test(raw);
+
   return (
-    <Link
-      className="text-xs underline text-muted-foreground"
-      to={`/app/hcs/transactions/${encodeURIComponent(raw)}`}
-    >
-      HCS transaction details
+     <Link className="text-xs underline text-muted-foreground" to={hcsDetailPath(raw)}>
+      {isTransactionId ? "HCS transaction details" : "HCS message details"}
     </Link>
   );
 }

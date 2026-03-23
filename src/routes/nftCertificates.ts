@@ -88,12 +88,11 @@ function requireProofDate(v: unknown): string {
   return s;
 }
 
-function requireCertificateKind(v: unknown): "dataset_certificate" | "merkle_anchor_certificate" | "ingest_certificate" {
+function requireCertificateKind(v: unknown): "dataset_certificate" | "merkle_anchor_certificate" {
   const s = String(v ?? "").trim();
   if (
     s !== "dataset_certificate" &&
-    s !== "merkle_anchor_certificate" &&
-    s !== "ingest_certificate"
+    s !== "merkle_anchor_certificate"
   ) {
     const e: any = new Error("invalid_certificate_kind");
     e.statusCode = 400;

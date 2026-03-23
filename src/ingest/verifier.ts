@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/ingest/verifier.ts
-// Version: 1.0-hf-ingest-verifier-v1 | 2026-03-06
+// Version: 1.1-hf-ingest-verifier-v1-submit | 2026-03-20
 // Purpose:
 //   Verify ingest bundles / receipts and optionally verify file-set material
 //   against a local directory.
@@ -17,8 +17,9 @@ import {
   parseIngestBundleV1,
   parseIngestReceiptV1,
 } from "./validators.js";
+import { IngestError } from "./errors.js";
 import { hashJsonDigest } from "../hashing/contract.js";
-import type { IngestBundleV1, IngestInput } from "./types.js";
+import type { IngestBundleV1, IngestIdentity, IngestInput, IngestResult } from "./types.js";
 import type { IngestReceiptV1 } from "./receipt.js";
 
 export type IngestVerifyMismatch = Readonly<{
@@ -125,6 +126,90 @@ export function verifyIngestReceipt(receipt: unknown): IngestVerifyResult {
   });
 }
 
+export function verifySubmittedIngestEvidence(opts: {
+  identity: IngestIdentity;
+  evidence: IngestResult;
+}): IngestVerifyResult {
+  const mismatches: IngestVerifyMismatch[] = [];
+  const bundle = parseIngestBundleV1(opts.evidence.bundle) as IngestBundleV1;
+
+  const bundleCheck = verifyIngestBundle(bundle);
+  mismatches.push(...bundleCheck.mismatches);
+
+  const recomputedBundleDigest = ingestBundleDigest(bundle);
+  const recomputedFingerprint = ingestFingerprint(bundle);
+  const recomputedMerkle = bundle.merkle ? merkleRootFromItems(bundle.items).root : undefined;
+  const recomputedIdem = ingestIdempotencyKey(String(bundle.identity.object_key), recomputedFingerprint);
+
+  if (opts.evidence.object_key !== opts.identity.object_key) {
+    mismatches.push(
+      mismatch("evidence.object_key", opts.identity.object_key, opts.evidence.object_key)
+    );
+  }
+
+  if (opts.evidence.object_kind !== opts.identity.object_kind) {
+    mismatches.push(
+      mismatch("evidence.object_kind", opts.identity.object_kind, opts.evidence.object_kind)
+    );
+  }
+
+  if (bundle.identity.object_key !== opts.identity.object_key) {
+    mismatches.push(
+      mismatch("bundle.identity.object_key", opts.identity.object_key, bundle.identity.object_key)
+    );
+  }
+
+  if (bundle.identity.object_kind !== opts.identity.object_kind) {
+    mismatches.push(
+      mismatch("bundle.identity.object_kind", opts.identity.object_kind, bundle.identity.object_kind)
+    );
+  }
+
+  if ((opts.identity.program ?? null) !== (bundle.identity.program ?? null)) {
+    mismatches.push(
+      mismatch("bundle.identity.program", opts.identity.program ?? null, bundle.identity.program ?? null)
+    );
+  }
+
+  if ((opts.identity.version_label ?? null) !== (bundle.identity.version_label ?? null)) {
+    mismatches.push(
+      mismatch(
+        "bundle.identity.version_label",
+        opts.identity.version_label ?? null,
+        bundle.identity.version_label ?? null
+      )
+    );
+  }
+
+  if (opts.evidence.bundle_digest !== recomputedBundleDigest) {
+    mismatches.push(mismatch("evidence.bundle_digest", recomputedBundleDigest, opts.evidence.bundle_digest));
+  }
+  if (opts.evidence.fingerprint !== recomputedFingerprint) {
+    mismatches.push(mismatch("evidence.fingerprint", recomputedFingerprint, opts.evidence.fingerprint));
+  }
+  if ((opts.evidence.merkle_root ?? null) !== (recomputedMerkle ?? null)) {
+    mismatches.push(mismatch("evidence.merkle_root", recomputedMerkle ?? null, opts.evidence.merkle_root ?? null));
+  }
+  if (opts.evidence.idempotency_key !== recomputedIdem) {
+    mismatches.push(mismatch("evidence.idempotency_key", recomputedIdem, opts.evidence.idempotency_key));
+  }
+
+  return Object.freeze({
+    ok: mismatches.length === 0,
+    mismatches: Object.freeze(mismatches.slice()),
+    computed: Object.freeze({
+      object_key: bundle.identity.object_key,
+      object_kind: bundle.identity.object_kind,
+      bundle_digest: recomputedBundleDigest,
+      fingerprint: recomputedFingerprint,
+      merkle_root: recomputedMerkle ?? null,
+      idempotency_key: recomputedIdem,
+      item_count: bundle.items.length,
+      total_bytes: bundle.summary.total_bytes,
+    }),
+  });
+}
+
 export async function verifyIngestFileSetAgainstReceiptOrBundle(opts: {
   receipt?: unknown;
   bundle?: unknown;
@@ -139,7 +224,17 @@ export async function verifyIngestFileSetAgainstReceiptOrBundle(opts: {
   const rules = (receipt?.rules ?? bundle?.rules) as IngestBundleV1["rules"] | undefined;
 
   if (!identity) {
-    throw new Error("verifyIngestFileSetAgainstReceiptOrBundle requires receipt or bundle");
+    throw new IngestError("verify_requires_receipt_or_bundle", {
+      code: "SCHEMA_INVALID",
+      statusCode: 400,
+    });
+  }
+
+  if (identity.object_kind !== "file_set") {
+    throw new IngestError("verify_root_dir_requires_file_set", {
+      code: "SCHEMA_INVALID",
+      statusCode: 400,
+    });
   }
 
   const localInput: IngestInput = Object.freeze({

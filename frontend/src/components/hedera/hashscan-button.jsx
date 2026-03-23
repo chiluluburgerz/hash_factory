@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { HcsTxHashscanLink } from "@/components/hcs/hcs-tx-link.jsx";
+import { HcsTxHashscanLink } from "@/components/hedera/hcs-tx-link.jsx";
 
 function baseClass(size) {
   const common =

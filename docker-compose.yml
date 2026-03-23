@@ -1,0 +1,29 @@
+services:
+  hf_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hf_api
+    env_file:
+      - .env.docker
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "4"
+    networks:
+      - edge
+      - internal
+
+networks:
+  edge:
+    external: true
+  internal:
+    external: true

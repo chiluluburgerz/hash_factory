@@ -1,6 +1,5 @@
 import React from "react";
 import { Badge } from "@/components/base/badge";
-import MirrorStatusPill from "@/components/hcs/mirror-status-pill.jsx";
 
 export const CERTIFICATE_TOKEN_CONFIG = Object.freeze({
   dataset_certificate: {
@@ -104,8 +103,6 @@ export function certificateKindLabel(kind) {
       return "Dataset";
     case "merkle_anchor_certificate":
       return "Merkle Anchor";
-    case "ingest_certificate":
-      return "Ingest";
     default:
       return kind || "Unknown";
   }
@@ -117,8 +114,6 @@ export function certificateKindVariant(kind) {
       return "info";
     case "merkle_anchor_certificate":
       return "outline";
-    case "ingest_certificate":
-      return "success";
     default:
       return "outline";
   }
@@ -156,24 +151,20 @@ export function certificateStatusLabel(status) {
 }
 
 export function hasAnchorSignals(row) {
-  return Boolean(
-    row?.hcs_topic_id ||
-      row?.hcs_transaction_id ||
-      row?.hcs_message_id ||
-      row?.hts_transaction_id
-  );
+  return Boolean(row?.hcs_topic_id || row?.hcs_transaction_id);
+}
+
+export function hasMintSignals(row) {
+  return Boolean(row?.hts_transaction_id || row?.minted_at || row?.serial_number != null);
 }
 
 export function certificateTrustState(row) {
-  if (row?.mirror_verified) return "verified";
   if (hasAnchorSignals(row)) return "anchored";
   return "unanchored";
 }
 
 export function certificateTrustVariant(trust) {
   switch (trust) {
-    case "verified":
-      return "success";
     case "anchored":
       return "outline";
     case "unanchored":
@@ -185,15 +176,22 @@ export function certificateTrustVariant(trust) {
 
 export function certificateTrustLabel(trust) {
   switch (trust) {
-    case "verified":
-      return "mirror verified";
     case "anchored":
       return "anchor observed";
     case "unanchored":
-      return "not observed";
+      return "not anchored";
     default:
       return trust || "unknown";
   }
+}
+
+function getCompactCertificate(row) {
+  const compact =
+    row?.certificate ??
+    row?.attributes?.certificate ??
+    null;
+
+  return isPlainObject(compact) ? compact : {};
 }
 
 export function toProofDateParam(value) {
@@ -214,189 +212,120 @@ export function summarizeCertificateSubject(row) {
     row?.attributes?.certificate?.subject ??
     row?.metadata?.subject ??
     row?.subject ??
-    {};
-
-  if (!isPlainObject(subject)) return "No subject summary";
+    null;
 
   const kind = String(row?.certificate_kind || row?.metadata?.certificate_kind || "").trim();
 
-  if (kind === "dataset_certificate") {
-    const datasetKey = String(subject.dataset_key || "").trim();
-    const version = subject.version != null ? String(subject.version).trim() : "";
-    const datasetVersionId = String(subject.dataset_version_id || "").trim();
+  if (isPlainObject(subject)) {
+    if (kind === "dataset_certificate") {
+      const datasetKey = String(subject.dataset_key || "").trim();
+      const version = subject.version != null ? String(subject.version).trim() : "";
+      const datasetVersionId = String(subject.dataset_version_id || "").trim();
 
-    if (datasetKey && version) return `${datasetKey}@${version}`;
-    if (datasetVersionId) return `dataset version ${shortId(datasetVersionId)}`;
-    if (datasetKey) return datasetKey;
+      if (datasetKey && version) return `${datasetKey}@${version}`;
+      if (datasetVersionId) return `dataset version ${shortId(datasetVersionId)}`;
+      if (datasetKey) return datasetKey;
+    }
+
+    if (kind === "merkle_anchor_certificate") {
+      const anchorRequestId = String(subject.anchor_request_id || "").trim();
+      const rootId = String(subject.root_id || "").trim();
+      const rootHash = String(subject.root_hash || "").trim();
+
+      if (anchorRequestId) return `anchor request ${shortId(anchorRequestId)}`;
+      if (rootId) return `root ${shortId(rootId)}`;
+      if (rootHash) return `root hash ${shortHash(rootHash)}`;
+    }
   }
 
-  if (kind === "merkle_anchor_certificate") {
-    const anchorRequestId = String(subject.anchor_request_id || "").trim();
-    const rootId = String(subject.root_id || "").trim();
-    const rootHash = String(subject.root_hash || "").trim();
+  const compact = getCompactCertificate(row);
+  const subjectRef =
+    String(
+      compact?.subject_ref ??
+      compact?.sr ??
+      row?.metadata?.subject_ref ??
+      ""
+    ).trim();
 
-    if (anchorRequestId) return `anchor request ${shortId(anchorRequestId)}`;
-    if (rootId) return `root ${shortId(rootId)}`;
-    if (rootHash) return `root hash ${shortHash(rootHash)}`;
+  if (subjectRef) {
+    if (kind === "dataset_certificate") return `Dataset ${subjectRef}`;
+    if (kind === "merkle_anchor_certificate") return `Merkle anchor ${subjectRef}`;
+    return subjectRef;
   }
 
-  if (kind === "ingest_certificate") {
-    const objectKey = String(subject.object_key || "").trim();
-    const datasetKey = String(subject.dataset_key || "").trim();
-    const datasetVersionId = String(subject.dataset_version_id || "").trim();
-
-    if (objectKey) return objectKey;
-    if (datasetKey) return datasetKey;
-    if (datasetVersionId) return `dataset version ${shortId(datasetVersionId)}`;
-  }
-
-  const pairs = Object.entries(subject)
-    .filter(([, v]) => v != null && String(v).trim() !== "")
-    .slice(0, 2)
-    .map(([k, v]) => `${k}: ${String(v)}`);
-
-  return pairs.length ? pairs.join(" • ") : "No subject summary";
+  if (kind === "dataset_certificate") return "Dataset certificate";
+  if (kind === "merkle_anchor_certificate") return "Merkle anchor certificate";
+  return "Certificate";
 }
 
 export function certificateMatchesQuery(row, query) {
   const q = String(query || "").trim().toLowerCase();
   if (!q) return true;
 
-  const subject =
-    row?.certificate?.subject ??
-    row?.attributes?.certificate?.subject ??
-    row?.metadata?.subject ??
-    row?.subject ??
-    {};
-
+  const status = getCertificateStatus(row);
+  const subject = summarizeCertificateSubject(row);
   const haystack = [
+    row?.certificate_kind,
+    row?.token_purpose,
+    row?.token_id,
+    row?.wallet_address,
     row?.nft_id,
     row?.id,
     row?.entity_id,
-    row?.token_id,
     row?.serial_number,
     row?.proof_date,
-    row?.certificate_kind,
-    row?.token_purpose,
-    row?.status,
-    row?.wallet_address,
     row?.hcs_topic_id,
     row?.hcs_transaction_id,
-    row?.hcs_message_id,
     row?.hts_transaction_id,
-    summarizeCertificateSubject(row),
-    isPlainObject(subject) ? JSON.stringify(subject) : "",
+    status,
+    subject,
   ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+    .map((v) => String(v ?? "").toLowerCase())
+    .join(" ");
 
   return haystack.includes(q);
 }
 
 export function normalizeCertificatesEnvelope(payload) {
-  const root = payload?.result ?? payload ?? null;
-
-  const certificates =
-    Array.isArray(root?.certificates)
-      ? root.certificates
-      : Array.isArray(root?.rows)
-        ? root.rows
-        : Array.isArray(root)
-          ? root
-          : [];
-
-  const page = isPlainObject(root?.page) ? root.page : {};
-  const total = Number(page?.total ?? certificates.length) || 0;
+  const p = payload?.result ?? payload ?? {};
+  const certificates = Array.isArray(p?.certificates)
+    ? p.certificates
+    : Array.isArray(p?.rows)
+      ? p.rows
+      : Array.isArray(p)
+        ? p
+        : [];
 
   return {
     certificates,
-    page,
-    total,
+    total: p?.total ?? certificates.length,
   };
-}
-
-export function isCertificateRowLike(v) {
-  return Boolean(
-    v &&
-    typeof v === "object" &&
-    !Array.isArray(v) &&
-    (
-      v.nft_id != null ||
-      v.proof_date != null ||
-      v.token_id != null ||
-      v.certificate_kind != null ||
-      v.wallet_address != null
-    )
-  );
 }
 
 export function extractCertificateFromPayload(payload) {
-  const root = payload?.result ?? payload ?? null;
-  if (!root || typeof root !== "object" || Array.isArray(root)) return null;
-
-  if (isCertificateRowLike(root)) return root;
-
-  if (isCertificateRowLike(root?.certificate)) return root.certificate;
-
-  if (root.certificate && typeof root.certificate === "object" && !Array.isArray(root.certificate)) {
-    return root.certificate;
-  }
-
-  return root;
-}
-
-export function extractExistingCheckFromPayload(payload) {
-  const root = payload?.result ?? payload ?? null;
-  if (root && typeof root === "object" && !Array.isArray(root)) return root;
-  return {};
-}
-
-export function getCertificateHoldingGroup(row) {
-  const tokenId = String(row?.token_id || "").trim();
-  const kind = String(row?.certificate_kind || "").trim();
-
-  if (
-    tokenId === CERTIFICATE_TOKEN_CONFIG.dataset_certificate.tokenId ||
-    kind === "dataset_certificate"
-  ) {
-    return "dataset_certificate";
-  }
-
-  if (
-    tokenId === CERTIFICATE_TOKEN_CONFIG.merkle_anchor_certificate.tokenId ||
-    kind === "merkle_anchor_certificate"
-  ) {
-    return "merkle_anchor_certificate";
-  }
-
-  return "other";
-}
-
-export function groupCertificatesByHolding(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-
-  const groups = {
-    dataset_certificate: [],
-    merkle_anchor_certificate: [],
-    other: [],
-  };
-
-  for (const row of list) {
-    groups[getCertificateHoldingGroup(row)].push(row);
-  }
-
-  return groups;
+  return payload?.result ?? payload ?? null;
 }
 
 export function sortCertificatesNewestFirst(rows) {
   return [...(Array.isArray(rows) ? rows : [])].sort((a, b) => {
-    const aTime =
-      Date.parse(a?.minted_at || a?.created_at || a?.updated_at || "") || 0;
-    const bTime =
-      Date.parse(b?.minted_at || b?.created_at || b?.updated_at || "") || 0;
-    return bTime - aTime;
+    const aTs = Date.parse(a?.minted_at || a?.created_at || a?.proof_date || 0);
+    const bTs = Date.parse(b?.minted_at || b?.created_at || b?.proof_date || 0);
+    return (Number.isFinite(bTs) ? bTs : 0) - (Number.isFinite(aTs) ? aTs : 0);
   });
+}
+
+export function groupCertificatesByHolding(rows) {
+  const buckets = {
+    dataset_certificate: [],
+    merkle_anchor_certificate: [],
+  };
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const kind = String(row?.certificate_kind || "").trim();
+    if (buckets[kind]) buckets[kind].push(row);
+  }
+
+  return buckets;
 }
 
 export function CertificateKindBadge({ kind }) {
@@ -404,25 +333,10 @@ export function CertificateKindBadge({ kind }) {
 }
 
 export function CertificateStatusBadge({ status }) {
-  return (
-    <Badge variant={certificateStatusVariant(status)}>
-      {certificateStatusLabel(status)}
-    </Badge>
-  );
+  return <Badge variant={certificateStatusVariant(status)}>{certificateStatusLabel(status)}</Badge>;
 }
 
 export function CertificateTrustBadge({ row }) {
   const trust = certificateTrustState(row);
   return <Badge variant={certificateTrustVariant(trust)}>{certificateTrustLabel(trust)}</Badge>;
-}
-
-export function CertificateMirrorBadge({ row }) {
-  return (
-    <MirrorStatusPill
-      hasAnchor={hasAnchorSignals(row)}
-      mirrorVerified={Boolean(row?.mirror_verified)}
-      failed={String(row?.status || "").trim().toLowerCase() === "mint_failed"}
-      size="md"
-    />
-  );
 }

@@ -28,11 +28,23 @@ import {
 } from "@/components/base/table.jsx";
 import { fetchJsonOrThrow } from "@/lib/apiClient.js";
 
+function isWalletLike(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+
+  const id = String(row.id ?? "").trim();
+  const walletAddress = String(
+    row.wallet_address ?? row.address ?? row.evm_address ?? ""
+  ).trim();
+  const userId = String(row.user_id ?? "").trim();
+  const orgId = String(row.org_id ?? "").trim();
+
+  return Boolean(id || walletAddress || userId || orgId);
+}
 
 function normalizeWalletsEnvelope(payload) {
   const root = payload?.result ?? payload ?? null;
 
-  const rows =
+  const rowsRaw =
     Array.isArray(root)
       ? root
       : Array.isArray(root?.rows)
@@ -49,25 +61,24 @@ function normalizeWalletsEnvelope(payload) {
                   ? payload.wallets
                   : [];
 
-  const total =
-    Number(
-      root?.total ??
-      payload?.total ??
-      rows.length
-    ) || 0;
+  const rows = rowsRaw.filter(isWalletLike);
+
+  const reportedTotal = Number(root?.total ?? payload?.total);
+  const total = Number.isFinite(reportedTotal) ? reportedTotal : rows.length;
 
   return {
     rows,
-    total,
+    total: Math.max(rows.length, total),
   };
 }
 
 function extractWalletFromPayload(payload) {
   const root = payload?.result ?? payload ?? null;
-  if (root && typeof root === "object" && !Array.isArray(root)) {
-    if (root.wallet && typeof root.wallet === "object") return root.wallet;
-    return root;
-  }
+  if (!root || typeof root !== "object" || Array.isArray(root)) return null;
+
+  if (isWalletLike(root?.wallet)) return root.wallet;
+  if (isWalletLike(root)) return root;
+
   return null;
 }
 
@@ -212,7 +223,18 @@ function WalletStatusBadge({ status }) {
 }
 
 function WalletTrustBadge({ trust }) {
-  return <Badge variant={trustVariant(trust)}>{trustLabel(trust)}</Badge>;
+  const label =
+    trust === "verified"
+      ? "mirror verified"
+      : trust === "anchored"
+        ? "anchor observed"
+        : "not anchored";
+
+  return (
+    <div className="inline-flex w-fit">
+      <Badge variant={trustVariant(trust)}>{label}</Badge>
+    </div>
+  );
 }
 
 function KeyValueRow({ label, value, mono = false }) {
@@ -383,13 +405,6 @@ function WalletsTableRow({
         <TableCell className="min-w-[150px]">
           <div className="flex flex-col gap-2">
             <WalletTrustBadge trust={trust} />
-            <div className="text-xs text-muted-foreground">
-              {row?.mirror_verified
-                ? "Mirror confirmed"
-                : row?.hcs_topic_id || row?.hcs_transaction_id || row?.hcs_message_id
-                  ? "HCS anchor present"
-                  : "No anchor observed"}
-            </div>
           </div>
         </TableCell>
 
@@ -568,10 +583,14 @@ export default function WalletsPage() {
 
       const normalized = normalizeWalletsEnvelope(walletsPayload);
       const primaryWallet = primaryPayload ? extractWalletFromPayload(primaryPayload) : null;
+      const safeRows = Array.isArray(normalized.rows) ? normalized.rows.filter(isWalletLike) : [];
 
-      setRows(Array.isArray(normalized.rows) ? normalized.rows : []);
-      setTotal(Number(normalized.total ?? 0) || 0);
-      setPrimaryWalletId(primaryWallet?.id || null);
+      setRows(safeRows);
+      setTotal(safeRows.length);
+      setPrimaryWalletId(
+        safeRows.find((row) => row?.is_primary)?.id ||
+        (primaryWallet && isWalletLike(primaryWallet) ? primaryWallet.id || null : null)
+      );
     } catch (err) {
       setRows([]);
       setTotal(0);

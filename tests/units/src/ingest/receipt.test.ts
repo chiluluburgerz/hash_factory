@@ -1,6 +1,6 @@
 // ============================================================================
 // File: tests/units/ingest/receipt.test.ts
-// Version: 1.0.0-hf-ingest-receipt-unit | 2026-03-07
+// Version: 1.1.1-hf-ingest-receipt-unit | 2026-03-20
 // Purpose:
 //   Unit tests for src/ingest/receipt.ts
 // Notes:
@@ -64,7 +64,7 @@ describe("ingest/receipt (unit)", () => {
       evidence_pointer: "s3://bucket/evidence.json",
       metadata: Object.freeze({ run_id: "run-1" }),
       core: {
-        anchor: {
+        receipt_anchor: {
           id: "anchor-1",
           anchor_request_id: "req-1",
           domain: "genomics",
@@ -72,15 +72,24 @@ describe("ingest/receipt (unit)", () => {
           proof_date: "2026-03-06",
           status: "anchored",
           root_id: "root-row-1",
-          merkle_root: "root-1",
           leaf_hash: "leaf-1",
-          topic_id: "0.0.123",
-          transaction_id: "tx-1",
-          message_id: "msg-1",
-          consensus_timestamp: "1700000000.000000000",
           ignored: "nope",
         },
-      },
+        root_anchor: {
+          id: "root-1",
+          root_hash: "root-1",
+          status: "anchored",
+          publish: {
+            topic_key: "HCS_EVENTS",
+            topic_name: "hcs_events",
+            topic_id: "0.0.123",
+            transaction_id: "tx-1",
+            message_id: "msg-1",
+            sequence_number: 7,
+            ignored: "nope",
+          },
+        },
+      } as any,
     });
 
     expect(hashJsonDigestMock).toHaveBeenCalledTimes(1);
@@ -123,20 +132,27 @@ describe("ingest/receipt (unit)", () => {
           run_id: "run-1",
         },
         core: {
-          anchor: {
+          receipt_anchor: {
             id: "anchor-1",
-            anchor_request_id: "req-1",
             domain: "genomics",
             payload_type: "ingest_receipt_v1",
             proof_date: "2026-03-06",
             status: "anchored",
             root_id: "root-row-1",
-            merkle_root: "root-1",
             leaf_hash: "leaf-1",
-            topic_id: "0.0.123",
-            transaction_id: "tx-1",
-            message_id: "msg-1",
-            consensus_timestamp: "1700000000.000000000",
+          },
+          root_anchor: {
+            id: "root-1",
+            root_hash: "root-1",
+            status: "anchored",
+            publish: {
+              topic_key: "HCS_EVENTS",
+              topic_name: "hcs_events",
+              topic_id: "0.0.123",
+              transaction_id: "tx-1",
+              message_id: "msg-1",
+              sequence_number: 7,
+            },
           },
         },
       },
@@ -182,20 +198,27 @@ describe("ingest/receipt (unit)", () => {
         run_id: "run-1",
       },
       core: {
-        anchor: {
+        receipt_anchor: {
           id: "anchor-1",
-          anchor_request_id: "req-1",
           domain: "genomics",
           payload_type: "ingest_receipt_v1",
           proof_date: "2026-03-06",
           status: "anchored",
           root_id: "root-row-1",
-          merkle_root: "root-1",
           leaf_hash: "leaf-1",
-          topic_id: "0.0.123",
-          transaction_id: "tx-1",
-          message_id: "msg-1",
-          consensus_timestamp: "1700000000.000000000",
+        },
+        root_anchor: {
+          id: "root-1",
+          root_hash: "root-1",
+          status: "anchored",
+          publish: {
+            topic_key: "HCS_EVENTS",
+            topic_name: "hcs_events",
+            topic_id: "0.0.123",
+            transaction_id: "tx-1",
+            message_id: "msg-1",
+            sequence_number: 7,
+          },
         },
       },
     });
@@ -318,7 +341,7 @@ describe("ingest/receipt (unit)", () => {
     expect(withProofDate.anchor).toEqual({ proof_date: "2026-03-06" });
   });
 
-  it("projects camelCase core anchor fields to stable snake_case receipt fields", async () => {
+  it("projects stable snake_case fields from receipt_anchor blocks", async () => {
     const { buildIngestReceiptV1 } = await import("../../../../src/ingest/receipt.js");
 
     const evidence = Object.freeze({
@@ -336,15 +359,17 @@ describe("ingest/receipt (unit)", () => {
       mode: "register_and_anchor" as any,
       evidence,
       core: {
-        anchorRequestId: "req-5",
-        rootId: "root-5",
-        proofDate: "2026-03-06",
+        receipt_anchor: {
+          anchor_request_id: "req-5",
+          root_id: "root-5",
+          proof_date: "2026-03-06",
+          ignored: "nope",
+        },
       } as any,
     });
 
     expect(receipt.core).toEqual({
-      anchor: {
-        anchor_request_id: "req-5",
+      receipt_anchor: {
         root_id: "root-5",
         proof_date: "2026-03-06",
       },

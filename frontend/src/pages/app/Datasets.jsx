@@ -11,11 +11,10 @@ import {
   ChevronDown,
   ChevronRight,
   FolderUp,
-  FileCheck2,
   ArrowRight,
   Layers3,
-  ScrollText,
   Package,
+  X,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -90,10 +89,12 @@ function getDatasetLabel(row) {
 function getDatasetVisibility(row) {
   const raw = String(
     row?.visibility ||
-    row?.visibility_kind ||
-    row?.publish_visibility ||
-    ""
-  ).trim().toLowerCase();
+      row?.visibility_kind ||
+      row?.publish_visibility ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
 
   if (!raw) return "unknown";
   if (raw === "organization" || raw === "organization_only") return "org";
@@ -129,10 +130,12 @@ function visibilityLabel(visibility) {
 function getDatasetStatus(row) {
   const raw = String(
     row?.status ||
-    row?.lifecycle_status ||
-    row?.state ||
-    ""
-  ).trim().toLowerCase();
+      row?.lifecycle_status ||
+      row?.state ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
 
   if (raw) return raw;
   if (row?.disabled === true || row?.is_disabled === true) return "disabled";
@@ -261,6 +264,14 @@ function pickFirstNumber(...vals) {
   return null;
 }
 
+function hasValue(value) {
+  return !(value == null || value === "" || value === "—");
+}
+
+function compactItems(items) {
+  return items.filter((item) => hasValue(item?.value));
+}
+
 function matchesDatasetQuery(row, query) {
   const q = String(query || "").trim().toLowerCase();
   if (!q) return true;
@@ -324,8 +335,6 @@ function DatasetWorkflowCard({
   bullets,
   primaryTo,
   primaryLabel,
-  secondaryTo = null,
-  secondaryLabel = null,
 }) {
   return (
     <Card className="border-border/60 bg-card/35 backdrop-blur">
@@ -347,30 +356,18 @@ function DatasetWorkflowCard({
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <Button asChild>
-            <Link to={primaryTo}>
-              <ArrowRight className="mr-2 h-4 w-4" />
-              {primaryLabel}
-            </Link>
-          </Button>
-
-          {secondaryTo && secondaryLabel ? (
-            <Button asChild variant="outline">
-              <Link to={secondaryTo}>{secondaryLabel}</Link>
-            </Button>
-          ) : null}
-        </div>
+        <Button asChild>
+          <Link to={primaryTo}>
+            <ArrowRight className="mr-2 h-4 w-4" />
+            {primaryLabel}
+          </Link>
+        </Button>
       </CardContent>
     </Card>
   );
 }
 
-function DatasetTableRow({
-  row,
-  expandedRowId,
-  onToggleExpanded,
-}) {
+function DatasetTableRow({ row, expandedRowId, onToggleExpanded }) {
   const datasetKey = getDatasetKey(row);
   const expanded = expandedRowId === datasetKey;
   const visibility = getDatasetVisibility(row);
@@ -396,9 +393,58 @@ function DatasetTableRow({
     row?.fingerprint_hash ||
     row?.fingerprint ||
     row?.input_hash ||
-    "";
+    null;
 
   const updatedAt = row?.updated_at || row?.sealed_at || row?.created_at || null;
+
+  const identityItems = compactItems([
+    { key: "dataset_key", label: "Dataset key", value: datasetKey, mono: true },
+    { key: "label", label: "Label", value: getDatasetLabel(row) },
+    { key: "program", label: "Program", value: row?.program || null },
+    { key: "org_id", label: "Org id", value: row?.org_id || null, mono: true },
+    {
+      key: "owner_user_id",
+      label: "Owner user id",
+      value: row?.owner_user_id || row?.user_id || null,
+      mono: true,
+    },
+  ]);
+
+  const registryItems = compactItems([
+    { key: "visibility", label: "Visibility", value: visibilityLabel(visibility) },
+    { key: "status", label: "Status", value: statusLabel(status) },
+    { key: "trust", label: "Trust state", value: trustLabel(trust) },
+    {
+      key: "active_version",
+      label: "Active version",
+      value: row?.active_version != null ? String(row.active_version) : null,
+    },
+    { key: "fingerprint", label: "Fingerprint", value: fingerprint, mono: true },
+    {
+      key: "manifest_hash",
+      label: "Manifest hash",
+      value: row?.active_manifest_hash || row?.manifest_hash || null,
+      mono: true,
+    },
+    {
+      key: "dataset_hcs_transaction_id",
+      label: "Dataset HCS txn",
+      value: row?.dataset_hcs_transaction_id || row?.hcs_transaction_id || null,
+      mono: true,
+    },
+    {
+      key: "dataset_hcs_message_id",
+      label: "Dataset HCS msg",
+      value: row?.dataset_hcs_message_id || row?.hcs_message_id || null,
+      mono: true,
+    },
+  ]);
+
+  const hasMetadata =
+    row?.metadata &&
+    typeof row.metadata === "object" &&
+    !Array.isArray(row.metadata) &&
+    Object.keys(row.metadata).length > 0;
 
   return (
     <>
@@ -463,47 +509,26 @@ function DatasetTableRow({
         <TableRow>
           <TableCell colSpan={7} className="bg-card/20">
             <div className="grid gap-6 lg:grid-cols-2">
-              <EntityKeyValueGrid
-                title="Dataset identity"
-                items={[
-                  { key: "dataset_key", label: "Dataset key", value: datasetKey, mono: true },
-                  { key: "label", label: "Label", value: getDatasetLabel(row) },
-                  { key: "program", label: "Program", value: row?.program || "—" },
-                  { key: "org_id", label: "Org id", value: row?.org_id, mono: true },
-                  { key: "owner_user_id", label: "Owner user id", value: row?.owner_user_id || row?.user_id, mono: true },
-                ]}
-              />
-
-              <EntityKeyValueGrid
-                title="Trust and registry posture"
-                items={[
-                  { key: "visibility", label: "Visibility", value: visibilityLabel(visibility) },
-                  { key: "status", label: "Status", value: statusLabel(status) },
-                  { key: "trust", label: "Trust state", value: trustLabel(trust) },
-                  { key: "active_version", label: "Active version", value: row?.active_version != null ? String(row.active_version) : "—" },
-                  { key: "fingerprint", label: "Fingerprint", value: fingerprint || "—", mono: true },
-                  { key: "manifest_hash", label: "Manifest hash", value: row?.active_manifest_hash || row?.manifest_hash || "—", mono: true },
-                  {
-                    key: "dataset_hcs_transaction_id",
-                    label: "Dataset HCS txn",
-                    value: row?.dataset_hcs_transaction_id || row?.hcs_transaction_id || "—",
-                    mono: true,
-                  },
-                  {
-                    key: "dataset_hcs_message_id",
-                    label: "Dataset HCS msg",
-                    value: row?.dataset_hcs_message_id || row?.hcs_message_id || "—",
-                    mono: true,
-                  },
-                ]}
-              />
+              <EntityKeyValueGrid title="Dataset identity" items={identityItems} />
+              <EntityKeyValueGrid title="Registry posture" items={registryItems} />
             </div>
 
-            <div className="mt-6">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Metadata
+            {hasMetadata ? (
+              <div className="mt-6">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Metadata
+                </div>
+                <JsonBlock value={row.metadata} emptyLabel="No metadata" />
               </div>
-              <JsonBlock value={row?.metadata} emptyLabel="No metadata" />
+            ) : null}
+
+            <div className="mt-6 flex flex-wrap gap-2">
+              <Button asChild variant="outline">
+                <Link to={`/app/datasets/${encodeURIComponent(datasetKey)}`}>
+                  <ArrowRight className="mr-2 h-4 w-4" />
+                  Open dataset detail
+                </Link>
+              </Button>
             </div>
           </TableCell>
         </TableRow>
@@ -596,6 +621,11 @@ export default function DatasetsPage() {
     setExpandedRowId((prev) => (prev === rowId ? null : rowId));
   }
 
+  function clearAllFilters() {
+    setSearch("");
+    setVisibilityFilter("all");
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -604,16 +634,14 @@ export default function DatasetsPage() {
             Datasets
           </h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Browse registered datasets, inspect registry and trust posture, and choose between the managed guided flow, the local-first bridge flow, or downstream dataset inspection.
+            Browse the registry, inspect trust posture, or start a dataset workflow.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={() => void loadDatasets()}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh
-          </Button>
-        </div>
+        <Button type="button" variant="outline" onClick={() => void loadDatasets()}>
+          <RefreshCw className="mr-2 h-4 w-4" />
+          Refresh
+        </Button>
       </div>
 
       {topError ? (
@@ -626,46 +654,45 @@ export default function DatasetsPage() {
         <EntitySummaryCard
           title="Visible datasets"
           value={Number(stats.metricsTotal).toLocaleString()}
-          hint="Dataset identities visible to the current authenticated context."
+          hint="Datasets visible to the current actor."
           icon={Database}
         />
 
         <EntitySummaryCard
           title="Public datasets"
           value={Number(stats.publicCount).toLocaleString()}
-          hint="Datasets currently surfaced with public visibility."
+          hint="Datasets with public visibility."
           icon={Globe}
         />
 
         <EntitySummaryCard
           title="Active / ready"
           value={Number(stats.active).toLocaleString()}
-          hint="Datasets currently positioned for downstream use or review."
+          hint="Datasets currently positioned for use or review."
           icon={ShieldCheck}
         />
 
         <EntitySummaryCard
           title="Anchored"
           value={Number(stats.anchored).toLocaleString()}
-          hint="Datasets with observed HCS trust signals."
+          hint="Datasets with visible trust-layer linkage."
           icon={Link2}
         />
       </div>
 
       <EntitySection
-        title="Choose a dataset workflow"
-        description="The dataset slice supports three current postures: managed guided anchoring, local-first evidence finalization, and registry-grade inspection. Browser raw upload is not the current dataset posture."
+        title="Choose a workflow"
+        description="Use the managed path or finalize evidence computed outside HF."
       >
         <div className="grid gap-4 xl:grid-cols-2">
           <DatasetWorkflowCard
             icon={FolderUp}
             title="Guided dataset anchor"
-            description="HF runs the managed dataset flow: preview the plan, hash in the HF runtime, write the dataset and version record, publish when appropriate, and inspect the resulting trust output."
+            description="Hash, register, and publish through the managed HF flow."
             bullets={[
-              "Best for demos, managed environments, and internal operator workflows.",
-              "Best current surface for assisted onboarding and partner-led imports of existing web2 datasets.",
-              "Uses a dataset root that is available to the HF runtime.",
-              "Returns receipts, trust signals, publication state, and certificate output when eligible.",
+              "Best for managed onboarding and operator-led imports.",
+              "Uses a dataset root available to the HF runtime.",
+              "Returns receipts, publication state, and trust output when available.",
             ]}
             primaryTo="/app/datasets/anchor"
             primaryLabel="Open guided anchor"
@@ -674,12 +701,11 @@ export default function DatasetsPage() {
           <DatasetWorkflowCard
             icon={Package}
             title="Local-first submit"
-            description="Compute deterministic evidence locally with the package or script, then submit that evidence into HF to finalize registry-backed state without sending raw dataset material through the request."
+            description="Submit deterministic evidence produced outside HF and let HF finalize registry state."
             bullets={[
-              "Best for privacy-sensitive and operator-grade workflows.",
-              "Acts as the current bridge between the local package and anchored finalization.",
-              "Best near-term path before a desktop app exists.",
-              "Lets HF verify submitted evidence and complete the dataset, version, publication, and certificate transition.",
+              "Best for privacy-sensitive and operator-grade flows.",
+              "Bridges local evidence into anchored finalization.",
+              "Completes dataset, version, publication, and related trust records.",
             ]}
             primaryTo="/app/datasets/submit"
             primaryLabel="Open local-first submit"
@@ -689,40 +715,57 @@ export default function DatasetsPage() {
 
       <EntitySection
         title="Dataset registry"
-        description="Search by name, dataset key, fingerprint, program, or trust identifiers. Use visibility to narrow what you are reviewing, then expand a row or open the detail page for deeper inspection."
+        description="Search by key, label, fingerprint, program, or trust identifiers."
       >
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-1 items-center gap-2 rounded-xl border border-border/60 bg-card/25 px-3 py-2">
-            <Search className="h-4 w-4 text-muted-foreground" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search dataset key, name, fingerprint, program, org id, or HCS ids"
-              className="w-full bg-transparent text-sm outline-none"
-            />
+        <div className="space-y-4">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+            <div className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-border/60 bg-card/25 px-4 py-3">
+              <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search dataset key, name, fingerprint, program, org id, or HCS ids"
+                className="w-full min-w-0 bg-transparent text-sm outline-none"
+              />
+              {search ? (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 bg-background/40 hover:bg-muted/30"
+                  aria-label="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                ["all", "All"],
+                ["public", "Public"],
+                ["org", "Org"],
+                ["private", "Private"],
+              ].map(([value, label]) => (
+                <Button
+                  key={value}
+                  type="button"
+                  variant={visibilityFilter === value ? "default" : "outline"}
+                  onClick={() => setVisibilityFilter(value)}
+                >
+                  {label}
+                </Button>
+              ))}
+
+              {(search || visibilityFilter !== "all") ? (
+                <Button type="button" variant="outline" onClick={clearAllFilters}>
+                  <X className="mr-2 h-4 w-4" />
+                  Clear
+                </Button>
+              ) : null}
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {[
-              ["all", "All"],
-              ["public", "Public"],
-              ["org", "Org"],
-              ["private", "Private"],
-            ].map(([value, label]) => (
-              <Button
-                key={value}
-                type="button"
-                variant={visibilityFilter === value ? "default" : "outline"}
-                onClick={() => setVisibilityFilter(value)}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-4">
           {isLoading ? (
             <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
               Loading datasets...
@@ -750,7 +793,7 @@ export default function DatasetsPage() {
                   const datasetKey = getDatasetKey(row);
                   return (
                     <DatasetTableRow
-                      key={datasetKey || `${row?.org_id}-${row?.created_at || Math.random()}`}
+                      key={datasetKey || `${row?.org_id}-${row?.created_at || "row"}`}
                       row={row}
                       expandedRowId={expandedRowId}
                       onToggleExpanded={toggleExpanded}
@@ -764,46 +807,9 @@ export default function DatasetsPage() {
 
         {nextCursor ? (
           <div className="mt-4 text-xs text-muted-foreground">
-            More dataset pages are available. Cursor-based pagination can be added later once the public-facing registry workflow is fully locked.
+            More dataset pages are available.
           </div>
         ) : null}
-      </EntitySection>
-
-      <EntitySection
-        title="How to use this page"
-        description="This page is the registry and workflow entry surface for the dataset slice."
-      >
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Database className="h-4 w-4" />
-              Stable identity
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              The dataset key is the durable registry identity. Use it when you need a precise reference across ingest, publication, trust review, verification, and partner-assisted onboarding conversations.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Layers3 className="h-4 w-4" />
-              Choose the right flow
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Guided anchor is the managed path. Local-first submit is the bridge from locally computed evidence into anchored finalization. The detail page is where you inspect the resulting long-lived state.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <FileCheck2 className="h-4 w-4" />
-              Trust review
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Use trust state, visibility, active version, HCS linkage, and publication posture to quickly decide which datasets deserve deeper review on the detail page.
-            </p>
-          </div>
-        </div>
       </EntitySection>
     </div>
   );

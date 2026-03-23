@@ -1,12 +1,13 @@
 // ============================================================================
 // File: src/core/merkleAnchorClient.ts
-// Version: 1.1-hash-factory-merkle-anchor-client-hardened | 2026-03-14
+// Version: 1.2-hash-factory-merkle-anchor-client-read-write | 2026-03-20
 // Purpose:
 //   Hash Factory -> Core "Merkle Anchor" client.
 //   - Default auth: service key via CoreClient (CORE_SERVICE_API_KEY)
 //   - Optional per-request auth override via CoreRequestCtx
 //     (coreAuthHeader/coreApiKey) for user pass-through
 //   - Strict input normalization for anchor routes
+//   - Read + write support for merkle anchor requests
 //   - No retries by default; anchor writes are not retried automatically
 //   - Trusted HF root/publish helpers for certificate-eligible flows
 // ============================================================================
@@ -43,6 +44,8 @@ const RE_MERKLE_DOMAIN =
   /^(jobs|results|payments|nfts|daily_rollup|global|([a-z]+:[A-Za-z0-9._:-]+)(\|[a-z]+:[A-Za-z0-9._:-]+)*)$/;
 
 const ROOT_ANCHOR_KINDS = new Set(["root", "job", "result", "cost", "event", "custom"]);
+const ANCHOR_STATUSES = new Set(["pending", "publishing", "published", "confirmed", "failed", "cancelled"]);
+const ORDER_VALUES = new Set(["ASC", "DESC"]);
 
 function isPlainObject(v: unknown): v is JsonObject {
   if (!v || typeof v !== "object") return false;
@@ -143,6 +146,62 @@ function normalizeAnchorKind(v: unknown): string | null {
   return s;
 }
 
+function normalizeAnchorStatus(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  const s = String(v).trim().toLowerCase();
+  if (!ANCHOR_STATUSES.has(s)) {
+    throw new MerkleAnchorClientError("invalid_status", {
+      statusCode: 400,
+      code: "INVALID_STATUS",
+    });
+  }
+  return s;
+}
+
+function normalizeOrder(v: unknown): "ASC" | "DESC" | null {
+  if (v == null || v === "") return null;
+  const s = String(v).trim().toUpperCase();
+  if (!ORDER_VALUES.has(s)) {
+    throw new MerkleAnchorClientError("invalid_order", {
+      statusCode: 400,
+      code: "INVALID_ORDER",
+    });
+  }
+  return s as "ASC" | "DESC";
+}
+
+function normalizePositiveInt(
+  v: unknown,
+  field: string,
+  { min = 1, max = 1000, fallback = 50 } = {}
+): number {
+  if (v == null || v === "") return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) {
+    throw new MerkleAnchorClientError(`invalid_${field}`, {
+      statusCode: 400,
+      code: `INVALID_${field.toUpperCase()}`,
+    });
+  }
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+function normalizeNonNegativeInt(
+  v: unknown,
+  field: string,
+  { max = 10_000_000, fallback = 0 } = {}
+): number {
+  if (v == null || v === "") return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) {
+    throw new MerkleAnchorClientError(`invalid_${field}`, {
+      statusCode: 400,
+      code: `INVALID_${field.toUpperCase()}`,
+    });
+  }
+  return Math.max(0, Math.min(max, Math.trunc(n)));
+}
+
 function stableIdempotencyKey(prefix: string, basis: string, requestId?: string | null): string {
   const rid = String(requestId ?? "").trim();
   if (rid) return `${prefix}:${basis}:${rid}`;
@@ -196,6 +255,19 @@ function buildMerkleWriteCtx(
   timeoutDefaultMs: number
 ): CoreRequestCtx {
   const timeoutMs = readEnvInt(timeoutEnv, timeoutDefaultMs, 15_000, 300_000);
+
+  return {
+    ...(ctx || {}),
+    timeoutMs,
+  };
+}
+
+function buildMerkleReadCtx(
+  ctx: CoreRequestCtx | undefined,
+  timeoutEnv: string,
+  timeoutDefaultMs: number
+): CoreRequestCtx {
+  const timeoutMs = readEnvInt(timeoutEnv, timeoutDefaultMs, 5_000, 120_000);
 
   return {
     ...(ctx || {}),
@@ -289,6 +361,8 @@ function unwrapResult(res: unknown): unknown {
 
 export type MerkleAnchorClient = Readonly<{
   anchorPayload: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
+  listAnchorRequests: (query?: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
+  getAnchorRequest: (anchorRequestId: unknown, query?: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   requestRootAnchor: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   requestRootAnchorFromHf: (body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
   publishExistingAnchorRequestFromHf: (anchorRequestId: unknown, body: JsonObject, ctx?: CoreRequestCtx) => Promise<JsonObject>;
@@ -335,6 +409,93 @@ export function makeCoreMerkleAnchor(core: CoreClient): MerkleAnchorClient {
       }
 
       const res = await core.post<any>("/v1/merkle/anchor", payload, ctx, { maxRetries: 0 });
+      const out = unwrapResult(res);
+      return out && typeof out === "object" ? (out as JsonObject) : {};
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  }
+
+  async function listAnchorRequests(query: JsonObject = {}, ctx?: CoreRequestCtx): Promise<JsonObject> {
+    try {
+      if (!isPlainObject(query)) {
+        throw new MerkleAnchorClientError("invalid_query", {
+          statusCode: 400,
+          code: "INVALID_QUERY",
+        });
+      }
+
+      const params = new URLSearchParams();
+
+      const domain = normalizeOptionalDomain(query.domain);
+      const proofDate = normalizeYmd(query.proof_date, "proof_date");
+      const status = normalizeAnchorStatus(query.status);
+      const anchorKind = normalizeAnchorKind(query.anchor_kind);
+      const payloadType = normalizeOptionalString(query.payload_type, "payload_type", 128);
+      const rootId = normalizeOptionalUuid(query.root_id, "root_id");
+      const order = normalizeOrder(query.order) ?? "DESC";
+      const limit = normalizePositiveInt(query.limit, "limit", { min: 1, max: 1000, fallback: 50 });
+      const offset = normalizeNonNegativeInt(query.offset, "offset", { max: 10_000_000, fallback: 0 });
+
+      if (domain) params.set("domain", domain);
+      if (proofDate) params.set("proof_date", proofDate);
+      if (status) params.set("status", status);
+      if (anchorKind) params.set("anchor_kind", anchorKind);
+      if (payloadType) params.set("payload_type", payloadType);
+      if (rootId) params.set("root_id", rootId);
+      params.set("limit", String(limit));
+      params.set("offset", String(offset));
+      params.set("order", order);
+
+      const effectiveCtx = buildMerkleReadCtx(
+        ctx,
+        "HF_CORE_MERKLE_ANCHOR_READ_TIMEOUT_MS",
+        30_000
+      );
+
+      const res = await core.get<any>(
+        `/v1/merkle/anchor/requests?${params.toString()}`,
+        effectiveCtx,
+        { maxRetries: 0 }
+      );
+      const out = unwrapResult(res);
+      return out && typeof out === "object" ? (out as JsonObject) : {};
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  }
+
+  async function getAnchorRequest(
+    anchorRequestId: unknown,
+    query: JsonObject = {},
+    ctx?: CoreRequestCtx
+  ): Promise<JsonObject> {
+    try {
+      if (!isPlainObject(query)) {
+        throw new MerkleAnchorClientError("invalid_query", {
+          statusCode: 400,
+          code: "INVALID_QUERY",
+        });
+      }
+
+      const id = normalizeUuid(anchorRequestId, "anchor_request_id");
+      const params = new URLSearchParams();
+
+      const proofDate = normalizeYmd(query.proof_date, "proof_date");
+      if (proofDate) params.set("proof_date", proofDate);
+
+      const effectiveCtx = buildMerkleReadCtx(
+        ctx,
+        "HF_CORE_MERKLE_ANCHOR_READ_TIMEOUT_MS",
+        30_000
+      );
+
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+      const res = await core.get<any>(
+        `/v1/merkle/anchor/requests/${encodeURIComponent(id)}${suffix}`,
+        effectiveCtx,
+        { maxRetries: 0 }
+      );
       const out = unwrapResult(res);
       return out && typeof out === "object" ? (out as JsonObject) : {};
     } catch (e) {
@@ -620,6 +781,8 @@ export function makeCoreMerkleAnchor(core: CoreClient): MerkleAnchorClient {
 
   return {
     anchorPayload,
+    listAnchorRequests,
+    getAnchorRequest,
     requestRootAnchor,
     requestRootAnchorFromHf,
     publishExistingAnchorRequestFromHf,

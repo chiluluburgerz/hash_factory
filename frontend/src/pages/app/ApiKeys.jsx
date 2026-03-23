@@ -167,6 +167,20 @@ function parseScopesInput(raw) {
   );
 }
 
+function parseExpiryDays(raw, { min = 1, max = 365 } = {}) {
+  const value = String(raw || "").trim();
+  if (!value) {
+    throw new Error("Expiry is required.");
+  }
+
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < min || num > max) {
+    throw new Error(`Expiry must be an integer between ${min} and ${max} days.`);
+  }
+
+  return num;
+}
+
 function parseMetadataInput(raw) {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -385,7 +399,7 @@ function CreateApiKeyCard({
               <input
                 type="number"
                 min="1"
-                max="3650"
+                max="365"
                 value={form.expiresInDays}
                 onChange={(e) => onChange("expiresInDays", e.target.value)}
                 placeholder="90"
@@ -500,7 +514,7 @@ function RotateApiKeyCard({
           <input
             type="number"
             min="1"
-            max="3650"
+            max="365"
             value={form.expiresInDays}
             onChange={(e) => onChange("expiresInDays", e.target.value)}
             placeholder="90"
@@ -958,16 +972,16 @@ export default function ApiKeysPage() {
         throw new Error("A maximum of 32 scopes is allowed.");
       }
 
-      const expiresInDays = String(form.expiresInDays || "").trim();
-      if (!expiresInDays) {
-        throw new Error("Expiry is required for key creation.");
-      }
+      const expiresInDays = parseExpiryDays(form.expiresInDays, {
+        min: 1,
+        max: 365,
+      });
 
       const metadata = parseMetadataInput(form.metadataText);
 
       const body = {
         ...(form.keyHint.trim() ? { key_hint: form.keyHint.trim() } : {}),
-        expires_in_days: Number(expiresInDays),
+        expires_in_days: expiresInDays,
         scopes,
         ...(metadata ? { metadata } : {}),
       };
@@ -1021,12 +1035,15 @@ export default function ApiKeysPage() {
         throw new Error("A maximum of 32 scopes is allowed.");
       }
 
-      const expiresInDays = String(rotateState.form.expiresInDays || "").trim();
+      const expiresInDays = parseExpiryDays(rotateState.form.expiresInDays, {
+        min: 1,
+        max: 365,
+      });
 
       const body = {
         old_api_key_id: row.id,
         ...(rotateState.form.keyHint.trim() ? { new_key_hint: rotateState.form.keyHint.trim() } : {}),
-        ...(expiresInDays ? { new_expires_in_days: Number(expiresInDays) } : {}),
+        new_expires_in_days: expiresInDays,
         new_scopes: scopes,
         disable_old: Boolean(rotateState.form.disableOld),
       };
@@ -1329,7 +1346,7 @@ export default function ApiKeysPage() {
               Time-bound issuance
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              Prefer expiry windows for demos, automation, and external integrations rather than perpetual credentials.
+              Use appropriate windows for demos, automation, and external integrations rather than long-lived credentials.
             </p>
           </div>
 

@@ -1,5 +1,4 @@
 // src/server.ts
-import "dotenv/config";
 import Fastify, {
   type FastifyError,
   type FastifyInstance,

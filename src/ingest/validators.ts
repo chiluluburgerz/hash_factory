@@ -1,6 +1,6 @@
 // ============================================================================
 // File: src/ingest/validators.ts
-// Version: 1.0-hf-ingest-validators-v1 | 2026-03-06
+// Version: 1.1-hf-ingest-validators-v1-submit | 2026-03-20
 // Purpose:
 //   Runtime validation for untrusted generic ingest JSON at HF boundaries.
 // Notes:
@@ -13,6 +13,7 @@ import type {
   FileSetMaterial,
   IngestBundleV1,
   IngestIdentity,
+  IngestResult,
   IngestInput,
   IngestItem,
   IngestMaterial,
@@ -437,6 +438,95 @@ export function parseIngestExecuteRequestV1(body: unknown): IngestExecuteRequest
   });
 }
 
+function parseIngestResultV1(body: unknown): IngestResult {
+  if (!isRecord(body)) {
+    throw new IngestValidationError("evidence_invalid", { code: "SCHEMA_INVALID" });
+  }
+
+  assertNoUnknownKeys(
+    body,
+    ["object_key", "object_kind", "fingerprint", "bundle_digest", "merkle_root", "bundle", "idempotency_key"],
+    "IngestResultV1"
+  );
+
+  const object_key = parseObjectKey(body.object_key);
+  const object_kind = parseKind(body.object_kind, "object_kind");
+  const fingerprint = asOptionalHex512(body.fingerprint, "fingerprint");
+  const bundle_digest = asOptionalHex512(body.bundle_digest, "bundle_digest");
+  const merkle_root = asOptionalHex512(body.merkle_root, "merkle_root");
+  const idempotency_key = asOptionalHex512(body.idempotency_key, "idempotency_key");
+  const bundle = parseIngestBundleV1(body.bundle);
+
+  if (!fingerprint || !bundle_digest || !merkle_root || !idempotency_key) {
+    throw new IngestValidationError("evidence_invalid", { code: "SCHEMA_INVALID" });
+  }
+
+  return Object.freeze({
+    object_key,
+    object_kind,
+    fingerprint,
+    bundle_digest,
+    merkle_root,
+    bundle,
+    idempotency_key,
+  }) as IngestResult;
+}
+
+export type IngestSubmitRequestV1 = Readonly<{
+  mode: "register_and_anchor";
+  identity: IngestIdentity;
+  evidence: IngestResult;
+  metadata?: Readonly<Record<string, unknown>>;
+  evidence_pointer: string;
+  domain: string;
+  proof_date: string;
+}>;
+
+export function parseIngestSubmitRequestV1(body: unknown): IngestSubmitRequestV1 {
+  if (!isRecord(body)) {
+    throw new IngestValidationError("request_invalid_body", { code: "SCHEMA_INVALID" });
+  }
+
+  assertNoUnknownKeys(
+    body,
+    ["mode", "identity", "evidence", "metadata", "evidence_pointer", "domain", "proof_date"],
+    "IngestSubmitRequestV1"
+  );
+
+  const mode = parseMode(body.mode);
+  if (mode !== "register_and_anchor") {
+    throw new IngestValidationError("submit_mode_invalid", { code: "SCHEMA_INVALID" });
+  }
+
+  const identity = parseIdentity(body.identity);
+  const evidence = parseIngestResultV1(body.evidence);
+  const metadata =
+    body.metadata === undefined ? undefined : (sanitizeJsonValue(body.metadata) as Record<string, unknown>);
+  const evidence_pointer = asOptionalString(body.evidence_pointer, "evidence_pointer", MAX_POINTER_LEN);
+  const domain = asOptionalString(body.domain, "domain", MAX_DOMAIN_LEN);
+  const proof_date = asOptionalString(body.proof_date, "proof_date", 10);
+
+  if (!evidence_pointer) {
+    throw new IngestValidationError("evidence_pointer_required", { code: "SCHEMA_INVALID" });
+  }
+  if (!domain) {
+    throw new IngestValidationError("domain_required", { code: "SCHEMA_INVALID" });
+  }
+  if (!proof_date || !RE_YMD.test(proof_date)) {
+    throw new IngestValidationError("proof_date_required", { code: "SCHEMA_INVALID" });
+  }
+
+  return Object.freeze({
+    mode,
+    identity,
+    evidence,
+    evidence_pointer,
+    domain,
+    proof_date,
+    ...(metadata !== undefined ? { metadata } : {}),
+  });
+}
+
 function parseIngestItem(x: unknown): IngestItem {
   if (!isRecord(x)) {
     throw new IngestValidationError("item_invalid", { code: "SCHEMA_INVALID" });
@@ -780,6 +870,15 @@ export function parseIngestReceiptV1(body: unknown): IngestReceiptV1 {
   const pointers = parseReceiptPointers(body.pointers);
   const metadata = parseReceiptMetadata(body.metadata);
   const core = parseReceiptCore(body.core);
+
+  if (mode === "register_and_anchor") {
+    if (!anchor?.domain) {
+      throw new IngestValidationError("receipt_anchor_domain_required", { code: "SCHEMA_INVALID" });
+    }
+    if (!anchor?.proof_date) {
+      throw new IngestValidationError("receipt_anchor_proof_date_required", { code: "SCHEMA_INVALID" });
+    }
+  } 
 
   return Object.freeze({
     v: "v1",

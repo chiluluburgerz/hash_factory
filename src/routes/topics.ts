@@ -17,6 +17,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { CoreClientError } from "../core/coreClient.js";
 import { TopicsClient, TopicsClientError } from "../core/topicsClient.js";
+import type { HederaService } from "../services/hederaService.js";
 import {
   createFixedWindowRateLimiter,
   rateLimitEnabled,
@@ -260,6 +261,7 @@ function mapCoreError(err: unknown): Error {
 
 export type TopicsRoutesOpts = Readonly<{
   topics: TopicsClient;
+  hederaService: HederaService;
 }>;
 
 function statusFromBootstrapResult(result: any): number {
@@ -276,18 +278,72 @@ function statusFromBootstrapResult(result: any): number {
   return 200;
 }
 
+const REQUIRED_ORG_TOPIC_NAMES = Object.freeze([
+  "organization_events",
+  "hcs_events",
+  "ledger_events",
+  "dataset_registry_events",
+]);
+
+function normalizeTopicNameValue(v: unknown): string | null {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (!/^[a-z0-9_-]{3,64}$/.test(s)) return null;
+  return s;
+}
+
+function topicNameOfRow(row: unknown): string | null {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const rec = row as Record<string, unknown>;
+  return (
+    normalizeTopicNameValue(rec.name) ??
+    normalizeTopicNameValue(rec.topic_name) ??
+    normalizeTopicNameValue(rec.topicName) ??
+    null
+  );
+}
+
+function buildTopicReadinessResult(rows: unknown[]) {
+  const required = [...REQUIRED_ORG_TOPIC_NAMES];
+  const presentSet = new Set<string>();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const name = topicNameOfRow(row);
+    if (name) presentSet.add(name);
+  }
+
+  const present = required.filter((name) => presentSet.has(name));
+  const missing = required.filter((name) => !presentSet.has(name));
+
+  return {
+    ready: missing.length === 0,
+    required_topic_names: required,
+    present_topic_names: present,
+    missing_topic_names: missing,
+    meta: {
+      required_count: required.length,
+      present_count: present.length,
+      missing_count: missing.length,
+    },
+  };
+}
+
 export const topicsRoutes: FastifyPluginAsync<TopicsRoutesOpts> = async (app: FastifyInstance, opts) => {
   if (!opts?.topics) throw new Error("topicsRoutes requires topics client");
+  if (!opts?.hederaService) throw new Error("topicsRoutes requires hederaService");
   const topics = opts.topics;
+  const hederaService = opts.hederaService;
 
   const requireAuth = app.requireAuth();
 
-  // Rate limits (bootstrap is expensive)
+  // Rate limits (bootstrap is expensive; readiness is cheap but still bounded)
   const windowMs = Math.max(1_000, readEnvInt(["TOPICS_RATE_LIMIT_WINDOW_MS"], 60_000));
   const maxEntries = Math.max(1_000, readEnvInt(["TOPICS_RATE_LIMIT_MAX_ENTRIES"], 50_000));
   const maxBootstrap = Math.max(1, readEnvInt(["TOPICS_RATE_LIMIT_BOOTSTRAP_MAX"], 12)); // /min per key
+  const maxReadiness = Math.max(1, readEnvInt(["TOPICS_RATE_LIMIT_READINESS_MAX"], 60)); // /min per key
 
   const limBootstrap = createFixedWindowRateLimiter({ windowMs, max: maxBootstrap, maxEntries });
+  const limReadiness = createFixedWindowRateLimiter({ windowMs, max: maxReadiness, maxEntries });
 
   function rlKey(req: FastifyRequest, routeName: string): string {
     const ip = getClientIp(req);
@@ -315,6 +371,45 @@ export const topicsRoutes: FastifyPluginAsync<TopicsRoutesOpts> = async (app: Fa
       reply.header("vary", "Accept");
     }
     return payload;
+  });
+
+  // GET /v1/orgs/:org_id/hedera/topics/readiness
+  app.get("/v1/orgs/:org_id/hedera/topics/readiness", { preHandler: requireAuth }, async (req, reply) => {
+    if (!enforce(limReadiness, rlKey(req, "topics:readiness"), req, reply)) return reply;
+
+    const actor = requireActor(req);
+
+    const orgId = String((req.params as any)?.org_id ?? "").trim();
+    if (!isUuid(orgId)) {
+      const e: any = new Error("invalid_org_id");
+      e.statusCode = 400;
+      e.code = "INVALID_ORG_ID";
+      throw e;
+    }
+
+    requireTenantAdminOrSystemForOrg(actor, orgId);
+    if (String(actor?.org_id ?? "") !== orgId) {
+      const e: any = new Error("cross_org_topic_readiness_not_supported");
+      e.statusCode = 409;
+      e.code = "CROSS_ORG_TOPIC_READINESS_NOT_SUPPORTED";
+      throw e;
+    }
+
+    const result = await hederaService.listTopics(
+      req,
+      actor,
+      hederaService.ctxFromReq(req, actor, false)
+    );
+
+    const readiness = buildTopicReadinessResult(Array.isArray(result) ? result : []);
+
+    return reply.code(200).send({
+      ok: true,
+      result: {
+        org_id: orgId,
+        ...readiness,
+      },
+    });
   });
 
   // POST /v1/orgs/:org_id/hedera/topics/bootstrap

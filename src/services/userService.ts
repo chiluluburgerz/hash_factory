@@ -98,30 +98,22 @@ function requireSelfOrTenantAdminOrSystem(actor: Actor | null | undefined, userI
 function normalizeNameOrUndefined(v: unknown): string | undefined {
   if (v === undefined) return undefined;
   const s = String(v ?? "").trim();
-  if (s.length < 1 || s.length > 150) {
+  if (s.length < 3 || s.length > 150) {
     throw new UserServiceError("invalid_name", { statusCode: 400, code: "INVALID_NAME" });
   }
   return s;
 }
 
-function normalizeSlugOrNullOrUndefined(v: unknown): string | null | undefined {
+function normalizeSlugOrUndefined(v: unknown): string | undefined {
   if (v === undefined) return undefined;
   const s = String(v ?? "").trim().toLowerCase();
-  if (!s) return null;
+  if (!s) {
+    throw new UserServiceError("invalid_slug", { statusCode: 400, code: "INVALID_SLUG" });
+  }
   if (!/^[a-z0-9][a-z0-9-]{0,98}$/.test(s)) {
     throw new UserServiceError("invalid_slug", { statusCode: 400, code: "INVALID_SLUG" });
   }
   return s;
-}
-
-function normalizeWalletOrNullOrUndefined(v: unknown): string | null | undefined {
-  if (v === undefined) return undefined;
-  const s = String(v ?? "").trim();
-  if (!s) return null;
-  if (!/^0x[a-fA-F0-9]{40}$/.test(s)) {
-    throw new UserServiceError("invalid_wallet_address", { statusCode: 400, code: "INVALID_WALLET" });
-  }
-  return s.toLowerCase();
 }
 
 function sanitizeMetadataOrUndefined(v: unknown, maxBytes: number): Record<string, unknown> | null | undefined {
@@ -153,9 +145,15 @@ function redactUser(v: unknown): unknown {
 function redactUsersPage(v: unknown): unknown {
   if (!isPlainObject(v)) return v;
   const out: Record<string, unknown> = { ...v };
+
   if (Array.isArray(out.items)) {
     out.items = out.items.map(redactUser);
   }
+
+  if (Array.isArray(out.rows)) {
+    out.rows = out.rows.map(redactUser);
+  }
+
   return out;
 }
 
@@ -188,11 +186,10 @@ export class UserService {
     const payload: Record<string, unknown> = {};
 
     if (input.name !== undefined) payload.name = normalizeNameOrUndefined(input.name);
-    if (input.slug !== undefined) payload.slug = normalizeSlugOrNullOrUndefined(input.slug);
-    if (input.wallet_address !== undefined) payload.wallet_address = normalizeWalletOrNullOrUndefined(input.wallet_address);
+    if (input.slug !== undefined) payload.slug = normalizeSlugOrUndefined(input.slug);
     if (input.metadata !== undefined) payload.metadata = sanitizeMetadataOrUndefined(input.metadata, this.maxMetadataBytes);
 
-    const allowed = new Set(["name", "slug", "wallet_address", "metadata"]);
+    const allowed = new Set(["name", "slug", "metadata"]);
     for (const k of Object.keys(input)) {
       if (!allowed.has(k)) {
         throw new UserServiceError("invalid_request", { statusCode: 400, code: "INVALID_REQUEST" });

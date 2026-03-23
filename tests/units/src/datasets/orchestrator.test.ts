@@ -1,6 +1,6 @@
 // ============================================================================
 // File: tests/units/datasets/orchestrator.test.ts
-// Version: 1.0.0-hf-datasets-orchestrator-unit | 2026-03-07
+// Version: 1.1.0-hf-datasets-orchestrator-unit | 2026-03-20
 // Purpose:
 //   Unit tests for src/datasets/orchestrator.ts
 // Notes:
@@ -17,8 +17,10 @@ vi.mock("../../../../src/datasets/workflow.js", () => ({
 }));
 
 const parseAnchorExecuteRequestV1Mock = vi.fn();
+const parseAnchorSubmitRequestV1Mock = vi.fn();
 vi.mock("../../../../src/datasets/validators.js", () => ({
   parseAnchorExecuteRequestV1: parseAnchorExecuteRequestV1Mock,
+  parseAnchorSubmitRequestV1: parseAnchorSubmitRequestV1Mock,
 }));
 
 const buildDatasetReceiptV1Mock = vi.fn();
@@ -26,11 +28,18 @@ vi.mock("../../../../src/datasets/receipt.js", () => ({
   buildDatasetReceiptV1: buildDatasetReceiptV1Mock,
 }));
 
+const verifySubmittedAnchorEvidenceMock = vi.fn();
+vi.mock("../../../../src/datasets/verifier.js", () => ({
+  verifySubmittedAnchorEvidence: verifySubmittedAnchorEvidenceMock,
+}));
+
 function makeDatasetsClient(overrides: Record<string, unknown> = {}) {
   return {
     upsertDataset: vi.fn(),
-    ingestVersionFromArtifact: vi.fn(),
+    setVisibility: vi.fn(),
+    ingestAnchoredVersionFromArtifact: vi.fn(),
     publishDatasetVersion: vi.fn(),
+    getDataset: vi.fn(),
     ...overrides,
   } as any;
 }
@@ -98,7 +107,7 @@ describe("datasets/orchestrator (unit)", () => {
       authHeader: "Bearer abc",
     });
 
-    const out = await orchestrator.execute({ any: true } as any, ctx as any);
+    const out = await orchestrator.executeServerLocal({ any: true } as any, ctx as any);
 
     expect(parseAnchorExecuteRequestV1Mock).toHaveBeenCalledWith({ any: true });
     expect(executeAnchorMock).toHaveBeenCalledWith(
@@ -122,8 +131,10 @@ describe("datasets/orchestrator (unit)", () => {
     });
 
     expect(datasets.upsertDataset).not.toHaveBeenCalled();
-    expect(datasets.ingestVersionFromArtifact).not.toHaveBeenCalled();
+    expect(datasets.setVisibility).not.toHaveBeenCalled();
+    expect(datasets.ingestAnchoredVersionFromArtifact).not.toHaveBeenCalled();
     expect(datasets.publishDatasetVersion).not.toHaveBeenCalled();
+    expect(datasets.getDataset).not.toHaveBeenCalled();
 
     expect(out).toEqual({
       mode: "hash_only",
@@ -150,6 +161,7 @@ describe("datasets/orchestrator (unit)", () => {
       evidence_pointer: "s3://bucket/dataset",
       display_name: "Dataset Two",
       metadata: { run_id: "run-2" },
+      publish_visibility: null,
       set_active: true,
     };
 
@@ -171,15 +183,18 @@ describe("datasets/orchestrator (unit)", () => {
       dataset_key: "dataset.2",
     });
 
+    const dsFinal = Object.freeze({
+      id: "ds-1",
+      dataset_key: "dataset.2",
+      active_manifest_hash: "manifest-1",
+    });
+
     const ver = Object.freeze({
       id: "ver-1",
       dataset_key: "dataset.2",
       dataset_fingerprint: "fp-2",
-    });
-
-    const pub = Object.freeze({
-      published: true,
-      target: "active",
+      manifest_hash: "manifest-1",
+      version: 2,
     });
 
     const receiptLocal = Object.freeze({
@@ -196,9 +211,8 @@ describe("datasets/orchestrator (unit)", () => {
       mode: "register_and_anchor",
       evidence,
       core: {
-        dataset: ds,
+        dataset: dsFinal,
         version: ver,
-        published: pub,
       },
     });
 
@@ -210,8 +224,8 @@ describe("datasets/orchestrator (unit)", () => {
 
     const datasets = makeDatasetsClient({
       upsertDataset: vi.fn().mockResolvedValue(ds),
-      ingestVersionFromArtifact: vi.fn().mockResolvedValue(ver),
-      publishDatasetVersion: vi.fn().mockResolvedValue(pub),
+      ingestAnchoredVersionFromArtifact: vi.fn().mockResolvedValue(ver),
+      getDataset: vi.fn().mockResolvedValue(dsFinal),
     });
 
     const orchestrator = makeDatasetAnchorOrchestrator(datasets);
@@ -222,7 +236,7 @@ describe("datasets/orchestrator (unit)", () => {
       tenantId: "tenant-1",
     });
 
-    const out = await orchestrator.execute({ req: true } as any, ctx as any);
+    const out = await orchestrator.executeServerLocal({ req: true } as any, ctx as any);
 
     expect(executeAnchorMock).toHaveBeenCalledWith(
       {
@@ -265,8 +279,10 @@ describe("datasets/orchestrator (unit)", () => {
       },
     );
 
-    expect(datasets.ingestVersionFromArtifact).toHaveBeenCalledTimes(1);
-    expect(datasets.ingestVersionFromArtifact).toHaveBeenCalledWith(
+    expect(datasets.setVisibility).not.toHaveBeenCalled();
+
+    expect(datasets.ingestAnchoredVersionFromArtifact).toHaveBeenCalledTimes(1);
+    expect(datasets.ingestAnchoredVersionFromArtifact).toHaveBeenCalledWith(
       "dataset.2",
       {
         matrix_path: "s3://bucket/dataset",
@@ -285,26 +301,23 @@ describe("datasets/orchestrator (unit)", () => {
       },
     );
 
-    expect(datasets.publishDatasetVersion).toHaveBeenCalledTimes(1);
-    expect(datasets.publishDatasetVersion).toHaveBeenCalledWith(
-      "dataset.2",
-      {},
-      {
-        authHeader: "Bearer abc",
-        requestId: "req-1",
-        tenantId: "tenant-1",
-        idempotencyKey: "idem-2",
-      },
-    );
+    expect(datasets.publishDatasetVersion).not.toHaveBeenCalled();
+
+    expect(datasets.getDataset).toHaveBeenCalledTimes(1);
+    expect(datasets.getDataset).toHaveBeenCalledWith("dataset.2", {
+      authHeader: "Bearer abc",
+      requestId: "req-1",
+      tenantId: "tenant-1",
+      idempotencyKey: "idem-2",
+    });
 
     expect(buildDatasetReceiptV1Mock).toHaveBeenNthCalledWith(2, {
       mode: "register_and_anchor",
       evidence,
       evidence_pointer: "s3://bucket/dataset",
       core: {
-        dataset: ds,
+        dataset: dsFinal,
         version: ver,
-        published: pub,
       },
     });
 
@@ -313,9 +326,8 @@ describe("datasets/orchestrator (unit)", () => {
       evidence,
       receipt: receiptAnchored,
       core: {
-        dataset: ds,
+        dataset: dsFinal,
         version: ver,
-        published: pub,
       },
     });
     expect(Object.isFrozen(out)).toBe(true);
@@ -335,6 +347,7 @@ describe("datasets/orchestrator (unit)", () => {
       evidence_pointer: null,
       display_name: null,
       metadata: undefined,
+      publish_visibility: null,
       set_active: true,
     };
 
@@ -357,12 +370,12 @@ describe("datasets/orchestrator (unit)", () => {
 
     const datasets = makeDatasetsClient({
       upsertDataset: vi.fn().mockResolvedValue({}),
-      ingestVersionFromArtifact: vi.fn().mockResolvedValue({}),
-      publishDatasetVersion: vi.fn().mockResolvedValue({}),
+      ingestAnchoredVersionFromArtifact: vi.fn().mockResolvedValue({}),
+      getDataset: vi.fn().mockResolvedValue({}),
     });
 
     const orchestrator = makeDatasetAnchorOrchestrator(datasets);
-    await orchestrator.execute({ req: true } as any, {} as any);
+    await orchestrator.executeServerLocal({ req: true } as any, {} as any);
 
     expect(datasets.upsertDataset).toHaveBeenCalledWith(
       {
@@ -379,7 +392,7 @@ describe("datasets/orchestrator (unit)", () => {
     );
   });
 
-  it("passes null total-bytes fields through ingestVersionFromArtifact when summary bytes is invalid", async () => {
+  it("passes null total-bytes fields through ingestAnchoredVersionFromArtifact when summary bytes is invalid", async () => {
     const { makeDatasetAnchorOrchestrator } = await import("../../../../src/datasets/orchestrator.js");
 
     const parsed = {
@@ -389,6 +402,7 @@ describe("datasets/orchestrator (unit)", () => {
       },
       root_dir: "/tmp/data",
       evidence_pointer: "s3://bucket/4",
+      publish_visibility: null,
       set_active: false,
     };
 
@@ -411,14 +425,14 @@ describe("datasets/orchestrator (unit)", () => {
 
     const datasets = makeDatasetsClient({
       upsertDataset: vi.fn().mockResolvedValue({}),
-      ingestVersionFromArtifact: vi.fn().mockResolvedValue({}),
-      publishDatasetVersion: vi.fn().mockResolvedValue({}),
+      ingestAnchoredVersionFromArtifact: vi.fn().mockResolvedValue({}),
+      getDataset: vi.fn().mockResolvedValue({}),
     });
 
     const orchestrator = makeDatasetAnchorOrchestrator(datasets);
-    await orchestrator.execute({ req: true } as any, null as any);
+    await orchestrator.executeServerLocal({ req: true } as any, null as any);
 
-    expect(datasets.ingestVersionFromArtifact).toHaveBeenCalledWith(
+    expect(datasets.ingestAnchoredVersionFromArtifact).toHaveBeenCalledWith(
       "dataset.4",
       {
         matrix_path: "s3://bucket/4",
@@ -450,13 +464,15 @@ describe("datasets/orchestrator (unit)", () => {
     const orchestrator = makeDatasetAnchorOrchestrator(datasets);
 
     await expect(
-      orchestrator.execute({ req: true } as any, {} as any),
+      orchestrator.executeServerLocal({ req: true } as any, {} as any),
     ).rejects.toBe(cause);
 
     expect(buildDatasetReceiptV1Mock).not.toHaveBeenCalled();
     expect(datasets.upsertDataset).not.toHaveBeenCalled();
-    expect(datasets.ingestVersionFromArtifact).not.toHaveBeenCalled();
+    expect(datasets.setVisibility).not.toHaveBeenCalled();
+    expect(datasets.ingestAnchoredVersionFromArtifact).not.toHaveBeenCalled();
     expect(datasets.publishDatasetVersion).not.toHaveBeenCalled();
+    expect(datasets.getDataset).not.toHaveBeenCalled();
   });
 
   it("propagates Core write failures after local receipt is built", async () => {
@@ -502,12 +518,14 @@ describe("datasets/orchestrator (unit)", () => {
     const orchestrator = makeDatasetAnchorOrchestrator(datasets);
 
     await expect(
-      orchestrator.execute({ req: true } as any, {} as any),
+      orchestrator.executeServerLocal({ req: true } as any, {} as any),
     ).rejects.toBe(cause);
 
     expect(buildDatasetReceiptV1Mock).toHaveBeenCalledTimes(1);
     expect(datasets.upsertDataset).toHaveBeenCalledTimes(1);
-    expect(datasets.ingestVersionFromArtifact).not.toHaveBeenCalled();
+    expect(datasets.setVisibility).not.toHaveBeenCalled();
+    expect(datasets.ingestAnchoredVersionFromArtifact).not.toHaveBeenCalled();
     expect(datasets.publishDatasetVersion).not.toHaveBeenCalled();
+    expect(datasets.getDataset).not.toHaveBeenCalled();
   });
 });

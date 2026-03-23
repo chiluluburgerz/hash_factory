@@ -74,10 +74,10 @@ function normalizeUserId(userId: unknown): string {
   return s;
 }
 
-function normalizeKeyTypeOrDefault(v: unknown): "rsa-2048" | "rsa-4096" | "ecdsa-p256" | "ecdsa-p384" {
+function normalizeKeyTypeOrDefault(v: unknown): "rsa-2048" | "rsa-4096" {
   const s = String(v ?? "").trim();
   if (!s) return "rsa-2048";
-  if (s === "rsa-2048" || s === "rsa-4096" || s === "ecdsa-p256" || s === "ecdsa-p384") return s;
+  if (s === "rsa-2048" || s === "rsa-4096") return s;
   throw new UserKeysClientError("invalid_key_type", { statusCode: 400, code: "INVALID_KEY_TYPE" });
 }
 
@@ -124,6 +124,14 @@ function normalizeHistoryQuery(q: HistoryQuery | undefined): { limit: number; of
   const offset = clampInt(q?.offset, 0, 10_000_000, 0);
   const includeDeleted = Boolean(q?.includeDeleted);
   return { limit, offset, includeDeleted };
+}
+
+function normalizeKeyVersion(keyVersion: unknown): number {
+  const n = Number(keyVersion);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 2_147_483_647) {
+    throw new UserKeysClientError("invalid_key_version", { statusCode: 400, code: "INVALID_KEY_VERSION" });
+  }
+  return Math.trunc(n);
 }
 
 function buildQueryString(q: Record<string, string | number | boolean | null | undefined>): string {
@@ -186,32 +194,31 @@ function redactPrivateFieldsDeep(value: unknown): unknown {
 }
 
 const ALLOWED_PUBLIC_KEY_FIELDS = new Set([
-  "user_id",
-  "key_type",
+  "id",
+  "public_key",
   "public_key_pem",
-  "public_jwk",
+  "key_type",
+  "key_version",
+  "status",
   "created_at",
   "updated_at",
+  "deleted_at",
   "metadata",
-  "status",
-  "revoked_at",
-  "rotated_at",
-  "version",
+  "rotation_triggered_at",
 ]);
 
 const ALLOWED_HISTORY_ROW_FIELDS = new Set([
-  "key_id",
-  "user_id",
-  "key_type",
+  "id",
+  "public_key",
   "public_key_pem",
-  "public_jwk",
-  "created_at",
-  "revoked_at",
-  "rotated_at",
+  "key_type",
+  "key_version",
   "status",
-  "metadata",
-  "version",
+  "created_at",
+  "updated_at",
   "deleted_at",
+  "metadata",
+  "rotation_triggered_at",
 ]);
 
 function pickAllowlistedObject(v: unknown, allow: Set<string>): Record<string, unknown> {
@@ -224,37 +231,104 @@ function pickAllowlistedObject(v: unknown, allow: Set<string>): Record<string, u
   return out;
 }
 
+function shapeKeyVersionResult(v: unknown): Record<string, unknown> {
+  const redacted = redactPrivateFieldsDeep(v);
+
+  if (!isPlainObject(redacted)) {
+    throw new UserKeysClientError("upstream_contract_error", {
+      statusCode: 502,
+      code: "UPSTREAM_CONTRACT_ERROR",
+    });
+  }
+
+  const picked = pickAllowlistedObject(redacted, ALLOWED_PUBLIC_KEY_FIELDS);
+
+  if (picked.public_key_pem === undefined && typeof picked.public_key === "string") {
+    picked.public_key_pem = picked.public_key;
+  }
+  if (picked.public_key === undefined && typeof picked.public_key_pem === "string") {
+    picked.public_key = picked.public_key_pem;
+  }
+
+  return picked;
+}
+
 function shapePublicKeyResult(v: unknown): Record<string, unknown> {
   const redacted = redactPrivateFieldsDeep(v);
-  if (!isPlainObject(redacted)) {
-    throw new UserKeysClientError("upstream_contract_error", { statusCode: 502, code: "UPSTREAM_CONTRACT_ERROR" });
+
+  // Current Core public-read contract is a raw PEM string.
+  if (typeof redacted === "string") {
+    const pem = redacted.trim();
+    if (!pem) {
+      throw new UserKeysClientError("upstream_contract_error", {
+        statusCode: 502,
+        code: "UPSTREAM_CONTRACT_ERROR",
+      });
+    }
+
+    return {
+      public_key: pem,
+      public_key_pem: pem,
+      status: "active",
+    };
   }
-  return pickAllowlistedObject(redacted, ALLOWED_PUBLIC_KEY_FIELDS);
+
+  if (!isPlainObject(redacted)) {
+    throw new UserKeysClientError("upstream_contract_error", {
+      statusCode: 502,
+      code: "UPSTREAM_CONTRACT_ERROR",
+    });
+  }
+
+  const picked = pickAllowlistedObject(redacted, ALLOWED_PUBLIC_KEY_FIELDS);
+
+  if (picked.public_key_pem === undefined && typeof picked.public_key === "string") {
+    picked.public_key_pem = picked.public_key;
+  }
+  if (picked.public_key === undefined && typeof picked.public_key_pem === "string") {
+    picked.public_key = picked.public_key_pem;
+  }
+
+  return picked;
 }
 
 function shapeHistoryResult(v: unknown): Record<string, unknown> {
   const redacted = redactPrivateFieldsDeep(v);
 
   if (!isPlainObject(redacted)) {
-    throw new UserKeysClientError("upstream_contract_error", { statusCode: 502, code: "UPSTREAM_CONTRACT_ERROR" });
+    throw new UserKeysClientError("upstream_contract_error", {
+      statusCode: 502,
+      code: "UPSTREAM_CONTRACT_ERROR",
+    });
   }
+
   const obj = redacted as Record<string, unknown>;
   const rowsRaw = obj["rows"];
-  const rows =
-    Array.isArray(rowsRaw)
-      ? rowsRaw.map((r) => pickAllowlistedObject(r, ALLOWED_HISTORY_ROW_FIELDS))
-      : [];
+
+  const rows = Array.isArray(rowsRaw)
+    ? rowsRaw.map((r) => {
+        const picked = pickAllowlistedObject(r, ALLOWED_HISTORY_ROW_FIELDS);
+
+        if (picked.public_key_pem === undefined && typeof picked.public_key === "string") {
+          picked.public_key_pem = picked.public_key;
+        }
+        if (picked.public_key === undefined && typeof picked.public_key_pem === "string") {
+          picked.public_key = picked.public_key_pem;
+        }
+
+        return picked;
+      })
+    : [];
 
   const base: Record<string, unknown> = {};
-  // Preserve paging fields if present
-  for (const k of ["user_id", "limit", "offset", "total"]) {
+  for (const k of ["limit", "offset", "total"]) {
     if (obj[k] !== undefined) base[k] = obj[k];
   }
-  // Canonicalize includeDeleted (preserve either casing if Core changes)
+
   if (obj["includeDeleted"] !== undefined) base["includeDeleted"] = obj["includeDeleted"];
   else if (obj["include_deleted"] !== undefined) base["includeDeleted"] = obj["include_deleted"];
-  base["rows"] = rows;
 
+  base["rows"] = rows;
   return base;
 }
 
@@ -284,7 +358,12 @@ export type UserKeysClient = Readonly<{
     ctx?: CoreRequestCtx,
     retry?: { maxRetries?: number } | null
   ) => Promise<Record<string, unknown>>;
-
+  getUserKeyVersion: (
+    userId: string,
+    keyVersion: number,
+    ctx?: CoreRequestCtx,
+    retry?: { maxRetries?: number } | null
+  ) => Promise<Record<string, unknown>>;
   generateUserKey: (
     userId: string,
     input?: { keyType?: unknown; metadata?: unknown } | null,
@@ -384,6 +463,27 @@ export function makeCoreUserKeys(core: CoreClient): UserKeysClient {
     }
   }
 
+  async function getUserKeyVersion(
+    userId: string,
+    keyVersion: number,
+    ctx?: CoreRequestCtx,
+    retry?: { maxRetries?: number } | null
+  ) {
+    const uid = normalizeUserId(userId);
+    const ver = normalizeKeyVersion(keyVersion);
+
+    try {
+      const res = await core.get<any>(
+        `/v1/user-keys/${encodeURIComponent(uid)}/versions/${encodeURIComponent(String(ver))}`,
+        ctx,
+        retry ?? undefined
+      );
+      return shapeKeyVersionResult(unwrapResult(res));
+    } catch (e) {
+      throw mapCoreError(e);
+    }
+  }
+
   async function rotateUserKey(userId: string, input?: { reseal?: unknown; metadata?: unknown } | null, ctx?: CoreRequestCtx) {
     const uid = normalizeUserId(userId);
     const reseal = input?.reseal === undefined || input?.reseal === null ? true : Boolean(input.reseal);
@@ -416,6 +516,7 @@ export function makeCoreUserKeys(core: CoreClient): UserKeysClient {
     getMeHistory,
     getUserPublicKey,
     getUserHistory,
+    getUserKeyVersion,
     generateUserKey,
     rotateUserKey,
     revokeUserKey,

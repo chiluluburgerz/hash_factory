@@ -14,11 +14,8 @@ import {
   Link2,
   History,
   CheckCircle2,
-  Package,
-  TerminalSquare,
-  Download,
-  KeyRound,
   FolderTree,
+  Download,
 } from "lucide-react";
 
 import useAppContext from "@/app/hooks/useAppContext.js";
@@ -29,9 +26,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import JsonBlock from "@/components/entities/json-block.jsx";
 import EntitySummaryCard from "@/components/entities/entity-summary-card.jsx";
 import { fetchJsonOrThrow } from "@/lib/apiClient.js";
-import HashscanButton from "@/components/hcs/hashscan-button.jsx";
-import { HcsTxLabel } from "@/components/hcs/hcs-tx-link.jsx";
-import MirrorStatusPill from "@/components/hcs/mirror-status-pill.jsx";
+import HashscanButton from "@/components/hedera/hashscan-button.jsx";
+import { HcsTxLabel } from "@/components/hedera/hcs-tx-link.jsx";
+import MirrorStatusPill from "@/components/hedera/mirror-status-pill.jsx";
 
 function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -40,11 +37,8 @@ function isPlainObject(value) {
 function parseJsonObjectInput(raw, emptyValue = null) {
   const text = String(raw || "").trim();
   if (!text) return emptyValue;
-
   const parsed = JSON.parse(text);
-  if (!isPlainObject(parsed)) {
-    throw new Error("JSON must be an object.");
-  }
+  if (!isPlainObject(parsed)) throw new Error("JSON must be an object.");
   return parsed;
 }
 
@@ -67,7 +61,6 @@ function deriveDatasetPosture(entitlements, membership) {
     Boolean(entitlements?.canAnchorDatasets) ||
     Boolean(entitlements?.canDatasetAnchor) ||
     canUseIngest;
-
   const isTenantAdmin = String(membership?.role || "") === "tenant_admin";
 
   return {
@@ -97,7 +90,6 @@ function SummaryCard({ icon: Icon, title, value, hint }) {
 
 function normalizePublishVisibility(value) {
   const raw = String(value || "").trim().toLowerCase();
-  if (!raw) return "";
   if (raw === "public" || raw === "unlisted") return raw;
   return "";
 }
@@ -136,7 +128,6 @@ function buildSubmitBody(form) {
 function validateSubmitForm(form) {
   const datasetKey = String(form.datasetKey || "").trim();
   const evidencePointer = String(form.evidencePointer || "").trim();
-
   if (!datasetKey) throw new Error("Dataset key is required.");
   if (!evidencePointer) throw new Error("Evidence pointer is required.");
   parseJsonObjectInput(form.evidenceText, null);
@@ -146,10 +137,8 @@ function validateSubmitForm(form) {
 function isSubmitReady(form, posture) {
   const datasetKey = String(form.datasetKey || "").trim();
   const evidencePointer = String(form.evidencePointer || "").trim();
-
   if (!posture.canRegisterAndAnchor) return false;
   if (!datasetKey || !evidencePointer) return false;
-
   try {
     parseJsonObjectInput(form.evidenceText, null);
     parseJsonObjectInput(form.metadataText, {});
@@ -191,8 +180,12 @@ function summarizeTrust(core) {
   return {
     datasetCreated: Boolean(core?.dataset?.dataset_id || core?.dataset?.dataset_key),
     versionCreated: Boolean(core?.version?.id || core?.version?.dataset_key),
-    published: Boolean(core?.published?.published?.dataset || core?.published?.published?.dataset_version),
-    certificateIssued: Boolean(core?.certificate?.issued || core?.certificate?.certificate?.issued),
+    published: Boolean(
+      core?.published?.published?.dataset || core?.published?.published?.dataset_version
+    ),
+    certificateIssued: Boolean(
+      core?.certificate?.issued || core?.certificate?.certificate?.issued
+    ),
   };
 }
 
@@ -235,11 +228,8 @@ function TrustSummaryCard({ core }) {
     <Card className="border-border/60 bg-card/25">
       <CardHeader>
         <CardTitle className="text-base">Submission summary</CardTitle>
-        <CardDescription>
-          Fast outcome view for the current local-first dataset submit run.
-        </CardDescription>
+        <CardDescription>Outcome for the current submit run.</CardDescription>
       </CardHeader>
-
       <CardContent>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
@@ -248,28 +238,24 @@ function TrustSummaryCard({ core }) {
               {summary.datasetCreated ? "Created / updated" : "Not present"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Version row</div>
             <div className="mt-1 font-semibold text-foreground/90">
               {summary.versionCreated ? "Created" : "Not present"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Publication</div>
             <div className="mt-1 font-semibold text-foreground/90">
               {summary.published ? "Published" : "Not published"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Certificate</div>
             <div className="mt-1 font-semibold text-foreground/90">
               {summary.certificateIssued ? "Issued" : "Not issued"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Replay posture</div>
             <div className="mt-1 font-semibold text-foreground/90">
@@ -292,18 +278,11 @@ function HcsActionRow({ title, transactionId, messageId, verified = false, loadi
       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </div>
-
       <div className="mt-2 min-w-0">
         <HcsTxLabel id={primaryId} monoClassName="text-[0.72rem]" />
       </div>
-
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <MirrorStatusPill
-          hasAnchor={true}
-          mirrorVerified={verified}
-          loading={loading}
-          size="sm"
-        />
+        <MirrorStatusPill hasAnchor={true} mirrorVerified={verified} loading={loading} size="sm" />
         <HashscanButton id={primaryId} size="sm" />
       </div>
     </div>
@@ -328,33 +307,10 @@ function VerifyResultCards({ verifyResult }) {
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
-      <SummaryCard
-        icon={ScrollText}
-        title="Receipt verify"
-        value={cardValue(receiptVerify)}
-        hint={cardHint(receiptVerify)}
-      />
-      <SummaryCard
-        icon={Layers3}
-        title="Bundle verify"
-        value={cardValue(bundleVerify)}
-        hint={cardHint(bundleVerify)}
-      />
-      <SummaryCard
-        icon={FolderTree}
-        title="Local verify"
-        value={cardValue(localVerify)}
-        hint={cardHint(localVerify)}
-      />
+      <SummaryCard icon={ScrollText} title="Receipt verify" value={cardValue(receiptVerify)} hint={cardHint(receiptVerify)} />
+      <SummaryCard icon={Layers3} title="Bundle verify" value={cardValue(bundleVerify)} hint={cardHint(bundleVerify)} />
+      <SummaryCard icon={FolderTree} title="Local verify" value={cardValue(localVerify)} hint={cardHint(localVerify)} />
     </div>
-  );
-}
-
-function ScriptBlock({ lines }) {
-  return (
-    <pre className="overflow-x-auto rounded-2xl border border-border/60 bg-background/70 p-4 text-xs text-foreground/90">
-      <code>{lines.join("\n")}</code>
-    </pre>
   );
 }
 
@@ -384,23 +340,8 @@ export default function DatasetSubmitPage() {
     evidencePointer: "",
     publishVisibility: "public",
     setActive: true,
-    metadataText: `{
-  "source": "hf-local-package",
-  "proof_date": "${today}"
-}`,
-    evidenceText: `{
-  "dataset_key": "",
-  "dataset_fingerprint": "",
-  "bundle_digest": "",
-  "merkle_root": "",
-  "idempotency_key": "",
-  "bundle": {
-    "summary": {
-      "file_count": 0,
-      "total_bytes": 0
-    }
-  }
-}`,
+    metadataText: `{\n  "source": "hf-local-package",\n  "proof_date": "${today}"\n}`,
+    evidenceText: `{\n  "dataset_key": "",\n  "dataset_fingerprint": "",\n  "bundle_digest": "",\n  "merkle_root": "",\n  "idempotency_key": "",\n  "bundle": {\n    "summary": {\n      "file_count": 0,\n      "total_bytes": 0\n    }\n  }\n}`,
     verifyReceiptText: "",
     verifyBundleText: "",
     verifyRootDir: "",
@@ -408,22 +349,14 @@ export default function DatasetSubmitPage() {
 
   React.useEffect(() => {
     if (!String(form.datasetKey || "").trim() && org?.id) {
-      setForm((prev) => ({
-        ...prev,
-        datasetKey: `${org.id}.sage.example.dataset.v1`,
-      }));
+      setForm((prev) => ({ ...prev, datasetKey: `${org.id}.sage.example.dataset.v1` }));
     }
   }, [org?.id, form.datasetKey]);
 
   const submitReady = React.useMemo(() => isSubmitReady(form, posture), [form, posture]);
 
-  const datasetKeyMissing =
-    hasTriedSubmit &&
-    !String(form.datasetKey || "").trim();
-
-  const evidencePointerMissing =
-    hasTriedSubmit &&
-    !String(form.evidencePointer || "").trim();
+  const datasetKeyMissing = hasTriedSubmit && !String(form.datasetKey || "").trim();
+  const evidencePointerMissing = hasTriedSubmit && !String(form.evidencePointer || "").trim();
 
   const evidenceInvalid = React.useMemo(() => {
     if (!hasTriedSubmit) return false;
@@ -448,10 +381,7 @@ export default function DatasetSubmitPage() {
   function updateForm(field, value) {
     setPageError("");
     setPageNotice("");
-    setForm((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+    setForm((prev) => ({ ...prev, [field]: value }));
   }
 
   async function handleSubmit() {
@@ -465,15 +395,12 @@ export default function DatasetSubmitPage() {
       if (!posture.canRegisterAndAnchor) {
         throw new Error("Local-first submit requires tenant-admin or system-admin posture.");
       }
-
       validateSubmitForm(form);
-
       const payload = await fetchJsonOrThrow("/datasets/anchor/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildSubmitBody(form)),
       });
-
       setSubmitResult(payload);
       setPageNotice("Local-first dataset submit completed.");
       setActivePanel("result");
@@ -514,7 +441,6 @@ export default function DatasetSubmitPage() {
           ...(rootDir ? { root_dir: rootDir } : {}),
         }),
       });
-
       setVerifyResult(payload);
       setPageNotice("Dataset verification completed.");
       setActivePanel("verify");
@@ -546,64 +472,21 @@ export default function DatasetSubmitPage() {
     core?.certificate?.certificate?.nft?.hcs_transaction_id ||
     core?.certificate?.nft?.hcs_transaction_id;
 
-  const sampleInstall = [
-    "npm install <hf-dataset-package>",
-    "",
-    "# or",
-    "pnpm add <hf-dataset-package>",
-  ];
-
-  const sampleEnv = [
-    "HF_BASE_URL=https://your-hf.example.com",
-    "HF_API_KEY=your_api_key",
-    "TEST_ROOT_DIR=/absolute/path/to/dataset/root",
-    "TEST_DATASET_KEY=org.program.dataset.v1",
-  ];
-
-  const sampleFlow = [
-    'import { executeDatasetAnchorLocalThenSubmit } from "<hf-dataset-package>";',
-    "",
-    "const result = await executeDatasetAnchorLocalThenSubmit(",
-    "  {",
-    '    baseUrl: process.env.HF_BASE_URL,',
-    "    auth: { apiKey: process.env.HF_API_KEY },",
-    "  },",
-    "  {",
-    "    identity: {",
-    '      dataset_key: "org.program.dataset.v1",',
-    '      program: "sage",',
-    '      version_label: "v1",',
-    "    },",
-    '    root_dir: process.env.TEST_ROOT_DIR,',
-    '    display_name: "Example dataset",',
-    "    metadata: {",
-    '      source: "hf-local-package",',
-    '      proof_date: "YYYY-MM-DD",',
-    "    },",
-    '    evidence_pointer: "s3://... or r2://...",',
-    '    publish_visibility: "unlisted",',
-    "    set_active: true,",
-    "  }",
-    ");",
-  ];
-
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-2">
           <div className="text-sm text-muted-foreground">
-            <Link to="/app/datasets" className="hover:underline">
-              Datasets
-            </Link>
+            <Link to="/app/datasets" className="hover:underline">Datasets</Link>
             <span className="mx-2">/</span>
             <span>Local-first submit</span>
           </div>
-
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
             Local-first dataset submit
           </h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Submit deterministic dataset evidence computed with the local package or script, then let HF verify the evidence and finalize the registry-backed dataset, version, publication, and certificate workflow.
+            Submit deterministic dataset evidence from a local run and let HF finalize dataset, version, publication, and certificate state.
           </p>
         </div>
 
@@ -612,7 +495,6 @@ export default function DatasetSubmitPage() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Reload context
           </Button>
-
           <Button asChild variant="outline">
             <Link to="/app/datasets/anchor">
               <FolderTree className="mr-2 h-4 w-4" />
@@ -634,6 +516,7 @@ export default function DatasetSubmitPage() {
         </div>
       ) : null}
 
+      {/* Summary cards */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <EntitySummaryCard
           title="Dataset anchor access"
@@ -654,45 +537,44 @@ export default function DatasetSubmitPage() {
           icon={FolderTree}
         />
         <EntitySummaryCard
-          title="Actor"
+          title="User"
           value={user?.displayName || user?.email || "Authenticated user"}
           hint={`role ${membership?.role || "unknown"}`}
           icon={ScrollText}
         />
       </div>
 
+      {/* Workflow posture */}
       <EntitySection
         title="Workflow posture"
-        description="This page is tightly coupled to the local dataset package and script flow. Compute evidence outside HF, keep raw dataset material local, then submit deterministic evidence here to finalize anchored registry state."
+        description="Use this page after evidence has been computed locally."
       >
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Package className="h-4 w-4" />
-              Local package first
+              <FileCheck2 className="h-4 w-4" />
+              Evidence handoff
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              This flow is designed to pair with the local lib. The user computes evidence locally with the same deterministic hashing and bundling logic the platform understands.
+              Submit evidence, identity, and a durable artifact pointer. Raw dataset material stays local.
             </p>
           </div>
-
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
               <CheckCircle2 className="h-4 w-4" />
-              Verified before finalization
+              HF finalization
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              HF validates submitted evidence against the declared dataset identity before completing dataset, version, publication, and certificate transitions.
+              HF validates the evidence before finalizing dataset, version, publication, and certificate state.
             </p>
           </div>
-
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <FileCheck2 className="h-4 w-4" />
-              Raw data stays local
+              <Search className="h-4 w-4" />
+              Verification-ready
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              This page does not upload the raw dataset itself. It accepts deterministic evidence and a durable artifact pointer so HF can finalize trusted registry state.
+              Returned receipts and bundles can be verified immediately using the verify workspace.
             </p>
           </div>
         </div>
@@ -710,78 +592,10 @@ export default function DatasetSubmitPage() {
         </div>
       </EntitySection>
 
+      {/* Compose form */}
       <EntitySection
-        title="Local package and script pairing"
-        description="This page should feel like a natural continuation of the local lib flow. Until the package download surface is live, make the operator story explicit here."
-      >
-        <div className="grid gap-6 xl:grid-cols-3">
-          <Card className="border-border/60 bg-card/35 backdrop-blur xl:col-span-1">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Download className="h-4 w-4" />
-                Package status
-              </CardTitle>
-              <CardDescription>
-                The local dataset package download surface is not wired into the product yet.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="space-y-3 text-sm text-muted-foreground">
-              <div>
-                Use this page now as the UI destination for operators who already have the local package, script, or internal instructions.
-              </div>
-              <div>
-                On launch, add a proper download/docs surface and link it here directly.
-              </div>
-              <div className="rounded-xl border border-border/60 bg-background/40 p-3">
-                <div className="font-semibold text-foreground/90">Recommended next product step</div>
-                <div className="mt-1">
-                  Add a real package/docs endpoint later, then replace placeholder install copy below with a direct install command and release notes link.
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/60 bg-card/35 backdrop-blur xl:col-span-2">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <TerminalSquare className="h-4 w-4" />
-                Expected local flow
-              </CardTitle>
-              <CardDescription>
-                These blocks mirror the operator experience the page is designed for.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="space-y-4">
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Install shape
-                </div>
-                <ScriptBlock lines={sampleInstall} />
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Environment shape
-                </div>
-                <ScriptBlock lines={sampleEnv} />
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Local-first submit shape
-                </div>
-                <ScriptBlock lines={sampleFlow} />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </EntitySection>
-
-      <EntitySection
-        title="Compose local-first submit request"
-        description="Paste deterministic evidence emitted by the local package or script, then provide the final dataset identity and publication inputs HF should bind to."
+        title="Compose submit request"
+        description="Paste local evidence and provide the dataset identity and publication inputs HF should bind."
       >
         <div className="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
           <div className="space-y-6">
@@ -798,9 +612,7 @@ export default function DatasetSubmitPage() {
                   placeholder="org.program.dataset.variant.v1"
                 />
                 {datasetKeyMissing ? (
-                  <p className="text-xs text-amber-300">
-                    Dataset key is required.
-                  </p>
+                  <p className="text-xs text-amber-300">Dataset key is required.</p>
                 ) : null}
               </div>
 
@@ -848,7 +660,7 @@ export default function DatasetSubmitPage() {
                   placeholder='{"dataset_key":"...","dataset_fingerprint":"...","bundle_digest":"...","merkle_root":"...","idempotency_key":"...","bundle":{...}}'
                 />
                 <p className="text-xs text-muted-foreground">
-                  Paste the deterministic evidence object emitted by the local package or script. This is the main bridge between the local flow and HF.
+                  Paste the deterministic evidence object from the local package or script.
                 </p>
                 {evidenceInvalid ? (
                   <p className="text-xs text-amber-300">
@@ -869,12 +681,10 @@ export default function DatasetSubmitPage() {
                   placeholder="s3://..., r2://..., file://..., or other durable artifact pointer"
                 />
                 <p className="text-xs text-muted-foreground">
-                  HF uses this durable pointer when finalizing anchored dataset state. It should refer to the artifact you actually want bound into the registry flow.
+                  Durable pointer to the evidence artifact HF should bind into the registry flow.
                 </p>
                 {evidencePointerMissing ? (
-                  <p className="text-xs text-amber-300">
-                    Evidence pointer is required.
-                  </p>
+                  <p className="text-xs text-amber-300">Evidence pointer is required.</p>
                 ) : null}
               </div>
 
@@ -895,9 +705,6 @@ export default function DatasetSubmitPage() {
                     </Button>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Applied during final registry-backed publication.
-                </p>
               </div>
 
               <div className="space-y-2">
@@ -924,7 +731,7 @@ export default function DatasetSubmitPage() {
                 placeholder='{"source":"hf-local-package"}'
               />
               <p className="text-xs text-muted-foreground">
-                Keep this aligned with the local operator context. This is a good place to tag source, modality, curation, package version, or demo provenance.
+                Optional metadata for source, provenance, or operator context.
               </p>
               {metadataInvalid ? (
                 <p className="text-xs text-amber-300">
@@ -934,50 +741,42 @@ export default function DatasetSubmitPage() {
             </div>
           </div>
 
+          {/* Sidebar */}
           <div className="space-y-4">
             <Card className="border-border/60 bg-card/35 backdrop-blur">
               <CardHeader>
                 <CardTitle className="text-base">Request summary</CardTitle>
-                <CardDescription>
-                  Quick review before submission.
-                </CardDescription>
+                <CardDescription>Review before submission.</CardDescription>
               </CardHeader>
-
               <CardContent className="space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Dataset key</span>
                   <span className="font-mono text-xs text-foreground/90">{form.datasetKey || "—"}</span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Program</span>
                   <span className="text-foreground/90">{form.program || "—"}</span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Version label</span>
                   <span className="text-foreground/90">{form.versionLabel || "—"}</span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Evidence JSON</span>
                   <span className="text-foreground/90">
                     {String(form.evidenceText || "").trim() ? "Provided" : "Required"}
                   </span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Evidence pointer</span>
                   <span className="text-foreground/90">
                     {String(form.evidencePointer || "").trim() ? "Provided" : "Required"}
                   </span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Visibility</span>
                   <span className="text-foreground/90">{form.publishVisibility || "—"}</span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Set active</span>
                   <span className="text-foreground/90">{form.setActive ? "true" : "false"}</span>
@@ -992,7 +791,6 @@ export default function DatasetSubmitPage() {
                   Submit precomputed evidence into the registry-backed dataset flow.
                 </CardDescription>
               </CardHeader>
-
               <CardContent className="flex flex-col gap-3">
                 <Button
                   type="button"
@@ -1002,7 +800,6 @@ export default function DatasetSubmitPage() {
                   <Play className="mr-2 h-4 w-4" />
                   {busyAction === "submit" ? "Submitting..." : "Submit local evidence"}
                 </Button>
-
                 <Button
                   type="button"
                   variant="outline"
@@ -1010,64 +807,15 @@ export default function DatasetSubmitPage() {
                   onClick={() => setActivePanel("verify")}
                 >
                   <Search className="mr-2 h-4 w-4" />
-                  Open verify panel
+                  Open verify workspace
                 </Button>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/60 bg-card/35 backdrop-blur">
-              <CardHeader>
-                <CardTitle className="text-base">What belongs here</CardTitle>
-                <CardDescription>
-                  Keep the line between local computation and HF finalization explicit.
-                </CardDescription>
-              </CardHeader>
-
-              <CardContent className="space-y-3 text-sm text-muted-foreground">
-                <div>
-                  <div className="font-semibold text-foreground/90">Use this page when</div>
-                  <div>You already ran the local package or script and now want HF to finalize trusted registry state.</div>
-                </div>
-
-                <div>
-                  <div className="font-semibold text-foreground/90">Do not use this page for</div>
-                  <div>Uploading raw datasets through the browser or asking HF to scan a local root path it cannot access.</div>
-                </div>
-
-                <div>
-                  <div className="font-semibold text-foreground/90">Need managed runtime hashing instead?</div>
-                  <div>Use the guided anchor page when the dataset root is available to the HF runtime and you want HF to compute evidence directly.</div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/60 bg-card/35 backdrop-blur">
-              <CardHeader>
-                <CardTitle className="text-base">Local lib coupling</CardTitle>
-                <CardDescription>
-                  Make the transition from CLI/package output to UI finalization feel obvious.
-                </CardDescription>
-              </CardHeader>
-
-              <CardContent className="space-y-3 text-sm text-muted-foreground">
-                <div className="flex items-start gap-2">
-                  <Package className="mt-0.5 h-4 w-4 text-foreground/80" />
-                  <span>Paste the emitted evidence object directly into the Evidence JSON field.</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <History className="mt-0.5 h-4 w-4 text-foreground/80" />
-                  <span>The same idempotency key produced locally drives replay-safe submit behavior in HF.</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <KeyRound className="mt-0.5 h-4 w-4 text-foreground/80" />
-                  <span>The API key used by the local script is the same authenticated context this page expects.</span>
-                </div>
               </CardContent>
             </Card>
           </div>
         </div>
       </EntitySection>
 
+      {/* Result workspace */}
       <EntitySection
         title="Result workspace"
         description="Inspect the finalized submit result or verify the resulting receipt and bundle."
@@ -1092,7 +840,7 @@ export default function DatasetSubmitPage() {
           <div className="space-y-4">
             {!submitResult ? (
               <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
-                No local-first dataset submit has been executed yet.
+                No local-first dataset submit has been run yet.
               </div>
             ) : (
               <>
@@ -1103,11 +851,14 @@ export default function DatasetSubmitPage() {
                     onClick={() => {
                       const latestReceipt = getLatestReceipt(submitResult);
                       const latestBundle = getLatestBundle(submitResult);
-
                       setForm((prev) => ({
                         ...prev,
-                        verifyReceiptText: latestReceipt ? JSON.stringify(latestReceipt, null, 2) : prev.verifyReceiptText,
-                        verifyBundleText: latestBundle ? JSON.stringify(latestBundle, null, 2) : prev.verifyBundleText,
+                        verifyReceiptText: latestReceipt
+                          ? JSON.stringify(latestReceipt, null, 2)
+                          : prev.verifyReceiptText,
+                        verifyBundleText: latestBundle
+                          ? JSON.stringify(latestBundle, null, 2)
+                          : prev.verifyBundleText,
                       }));
                       setActivePanel("verify");
                     }}
@@ -1115,7 +866,6 @@ export default function DatasetSubmitPage() {
                     <Search className="mr-2 h-4 w-4" />
                     Verify this result
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1126,7 +876,6 @@ export default function DatasetSubmitPage() {
                     <ScrollText className="mr-2 h-4 w-4" />
                     Copy receipt
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1137,7 +886,6 @@ export default function DatasetSubmitPage() {
                     <Copy className="mr-2 h-4 w-4" />
                     Copy bundle
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1147,7 +895,6 @@ export default function DatasetSubmitPage() {
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Run again
                   </Button>
-
                   {datasetKeyFromResult ? (
                     <Button asChild>
                       <Link to={`/app/datasets/${encodeURIComponent(datasetKeyFromResult)}`}>
@@ -1162,7 +909,7 @@ export default function DatasetSubmitPage() {
                   <EntitySummaryCard
                     title="Dataset key"
                     value={datasetKeyFromResult || "—"}
-                    hint="Resolved dataset identity returned by the local-first submit flow."
+                    hint="Resolved dataset identity returned by the submit flow."
                     icon={Database}
                   />
                   <EntitySummaryCard
@@ -1200,14 +947,12 @@ export default function DatasetSubmitPage() {
                     messageId={datasetMsgId}
                     verified={false}
                   />
-
                   <HcsActionRow
                     title="Dataset version transaction"
                     transactionId={versionTxnId}
                     messageId={versionMsgId}
                     verified={false}
                   />
-
                   <HcsActionRow
                     title="Certificate transaction"
                     transactionId={certTxnId}
@@ -1220,13 +965,13 @@ export default function DatasetSubmitPage() {
                     icon={FileCheck2}
                     title="Files"
                     value={String(evidenceSummary.fileCount || 0)}
-                    hint="File count reported in the submitted local bundle summary."
+                    hint="File count reported in the submitted bundle summary."
                   />
                   <SummaryCard
                     icon={Database}
                     title="Total bytes"
                     value={Number(evidenceSummary.totalBytes || 0).toLocaleString()}
-                    hint="Byte total reported in the submitted local bundle summary."
+                    hint="Byte total reported in the submitted bundle summary."
                   />
                   <SummaryCard
                     icon={Link2}
@@ -1238,7 +983,7 @@ export default function DatasetSubmitPage() {
                     icon={History}
                     title="Idempotency"
                     value={shortHash(evidenceSummary.idempotencyKey)}
-                    hint="Local idempotency key reused for replay-safe submit behavior."
+                    hint="Idempotency key used for replay-safe submit behavior."
                   />
                 </div>
 
@@ -1254,7 +999,6 @@ export default function DatasetSubmitPage() {
                       <JsonBlock value={evidence} emptyLabel="No evidence" />
                     </CardContent>
                   </Card>
-
                   <Card className="border-border/60 bg-card/25">
                     <CardHeader>
                       <CardTitle className="text-base">Receipt</CardTitle>
@@ -1272,7 +1016,7 @@ export default function DatasetSubmitPage() {
                   <CardHeader>
                     <CardTitle className="text-base">Core write output</CardTitle>
                     <CardDescription>
-                      Dataset row, version row, publication, certificate output, and replay posture returned by the local-first submit flow.
+                      Dataset row, version row, publication, certificate output, and replay posture returned by the submit flow.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1284,7 +1028,7 @@ export default function DatasetSubmitPage() {
                   <CardHeader>
                     <CardTitle className="text-base">Full submit response</CardTitle>
                     <CardDescription>
-                      Raw response returned by the HF dataset anchor submit route.
+                      Raw response returned by the dataset anchor submit route.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1308,7 +1052,6 @@ export default function DatasetSubmitPage() {
                     onClick={() => {
                       const latestReceipt = getLatestReceipt(submitResult);
                       if (!latestReceipt) return;
-
                       setForm((prev) => ({
                         ...prev,
                         verifyReceiptText: JSON.stringify(latestReceipt, null, 2),
@@ -1319,7 +1062,6 @@ export default function DatasetSubmitPage() {
                   >
                     Use latest receipt
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1327,7 +1069,6 @@ export default function DatasetSubmitPage() {
                     onClick={() => {
                       const latestBundle = getLatestBundle(submitResult);
                       if (!latestBundle) return;
-
                       setForm((prev) => ({
                         ...prev,
                         verifyBundleText: JSON.stringify(latestBundle, null, 2),
@@ -1372,7 +1113,11 @@ export default function DatasetSubmitPage() {
                 </div>
 
                 <div className="flex justify-end">
-                  <Button type="button" disabled={busyAction === "verify"} onClick={() => void handleVerify()}>
+                  <Button
+                    type="button"
+                    disabled={busyAction === "verify"}
+                    onClick={() => void handleVerify()}
+                  >
                     <Search className="mr-2 h-4 w-4" />
                     {busyAction === "verify" ? "Verifying..." : "Run verify"}
                   </Button>
@@ -1384,10 +1129,9 @@ export default function DatasetSubmitPage() {
                   <CardHeader>
                     <CardTitle className="text-base">Verify guidance</CardTitle>
                     <CardDescription>
-                      Re-check the returned receipt and bundle, and optionally compare them against local source material.
+                      Re-check the returned receipt and bundle, and optionally compare against local source material.
                     </CardDescription>
                   </CardHeader>
-
                   <CardContent className="space-y-3 text-sm text-muted-foreground">
                     <div>
                       <div className="font-semibold text-foreground/90">Receipt verify</div>
@@ -1413,7 +1157,7 @@ export default function DatasetSubmitPage() {
                 <CardHeader>
                   <CardTitle className="text-base">Verify response</CardTitle>
                   <CardDescription>
-                    Raw response returned by the HF dataset verify route.
+                    Raw response returned by the dataset verify route.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1423,43 +1167,6 @@ export default function DatasetSubmitPage() {
             ) : null}
           </div>
         ) : null}
-      </EntitySection>
-
-      <EntitySection
-        title="Recommended operator flow"
-        description="The strongest local-first flow should feel like a clean bridge from local computation into anchored registry state."
-      >
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Package className="h-4 w-4" />
-              Compute locally first
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Use the local package or script to scan, hash, bundle, and compute deterministic evidence on your own machine before opening this page.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <CheckCircle2 className="h-4 w-4" />
-              Submit with a real artifact pointer
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Finalization is strongest when the evidence pointer references the durable dataset artifact you actually intend Core to bind, publish, and verify.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <ArrowRight className="h-4 w-4" />
-              Finish on detail
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              After a successful submit, open the dataset detail page to inspect identity, HCS linkage, publication posture, certificate output, and long-lived registry state.
-            </p>
-          </div>
-        </div>
       </EntitySection>
     </div>
   );

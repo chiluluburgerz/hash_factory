@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { Badge } from "@/components/base/badge";
 import { Avatar, AvatarFallback } from "@/components/base/avatar";
 import { Button } from "@/components/base/button";
@@ -38,12 +39,16 @@ export default function AppHeader({ onSignedOut }) {
     entitlements,
     primaryWallet,
     apiKeys,
+    setup,
   } = useAppContext();
 
   function handleSignOut() {
     clearStoredApiKey();
     onSignedOut?.();
   }
+
+  const setupNeedsAttention = !isLoading && !setup?.isReady;
+  const setupBlockingCount = Number(setup?.blockingCount ?? 0);
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -75,6 +80,15 @@ export default function AppHeader({ onSignedOut }) {
           <Badge variant="outline">
             keys <span className="ml-1 font-mono">{Number(apiKeys?.active ?? 0)}</span>
           </Badge>
+
+          {setupNeedsAttention ? (
+            <Button asChild size="sm" variant="outline">
+              <Link to="/app/setup">
+                Setup
+                <span className="ml-2 font-mono">{setupBlockingCount}</span>
+              </Link>
+            </Button>
+          ) : null}
         </div>
 
         <div className="flex min-w-0 items-center gap-3 rounded-xl border border-border/60 bg-card/35 px-3 py-2">
@@ -93,9 +107,15 @@ export default function AppHeader({ onSignedOut }) {
             </div>
           </div>
 
-          <Button type="button" variant="outline" size="sm" onClick={handleSignOut}>
-            Sign out
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button asChild type="button" variant="outline" size="sm">
+              <Link to="/app/profile">Profile</Link>
+            </Button>
+
+            <Button type="button" variant="outline" size="sm" onClick={handleSignOut}>
+              Sign out
+            </Button>
+          </div>
         </div>
       </div>
     </header>

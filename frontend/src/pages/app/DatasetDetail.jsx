@@ -54,6 +54,13 @@ function pickFirstNumber(...vals) {
   return null;
 }
 
+function normalizeProofDate(value) {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
 function formatDateTime(value) {
   if (!value) return "—";
   const ms = Date.parse(value);
@@ -129,11 +136,13 @@ function visibilityLabel(visibility) {
 function getStatus(dataset, activeVersion) {
   const explicit = String(
     dataset?.status ||
-    dataset?.lifecycle_status ||
-    activeVersion?.status ||
-    activeVersion?.lifecycle_status ||
-    ""
-  ).trim().toLowerCase();
+      dataset?.lifecycle_status ||
+      activeVersion?.status ||
+      activeVersion?.lifecycle_status ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
 
   if (explicit) return explicit;
   if (dataset?.is_disabled === true || dataset?.disabled === true) return "disabled";
@@ -243,16 +252,10 @@ function normalizeDatasetBundle(datasetPayload, manifestPayload, activeVersionPa
     ) || {};
 
   const published =
-    pickFirstObject(
-      datasetRoot?.core?.published,
-      datasetRoot?.published
-    ) || {};
+    pickFirstObject(datasetRoot?.core?.published, datasetRoot?.published) || {};
 
   const certificate =
-    pickFirstObject(
-      datasetRoot?.certificate,
-      datasetRoot?.core?.certificate
-    ) || {};
+    pickFirstObject(datasetRoot?.certificate, datasetRoot?.core?.certificate) || {};
 
   return {
     raw: {
@@ -266,6 +269,56 @@ function normalizeDatasetBundle(datasetPayload, manifestPayload, activeVersionPa
     published,
     certificate,
   };
+}
+
+function buildDatasetCertificateLookup(bundle) {
+  const dataset = bundle?.dataset || {};
+  const activeVersion = bundle?.activeVersion || {};
+
+  const proof_date = normalizeProofDate(activeVersion?.sealed_at || activeVersion?.created_at);
+
+  const dataset_version_id =
+    activeVersion?.id || activeVersion?.dataset_version_id || activeVersion?.version_id || null;
+
+  const dataset_key = activeVersion?.dataset_key || dataset?.dataset_key || null;
+
+  const version = activeVersion?.version ?? activeVersion?.dataset_version ?? null;
+
+  if (!proof_date || !dataset_key || version == null) {
+    return null;
+  }
+
+  return {
+    proof_date,
+    subject: {
+      dataset_version_id: dataset_version_id || null,
+      dataset_key,
+      version,
+      manifest_hash: activeVersion?.manifest_hash || null,
+      schema_hash: activeVersion?.schema_hash || null,
+      dataset_fingerprint: activeVersion?.dataset_fingerprint || null,
+      row_count: activeVersion?.row_count ?? null,
+      col_count: activeVersion?.col_count ?? null,
+      bytes_estimate: activeVersion?.bytes_estimate ?? activeVersion?.artifact_bytes ?? null,
+      hcs_topic_id: activeVersion?.version_hcs_topic_id || activeVersion?.hcs_topic_id || null,
+      hcs_message_id:
+        activeVersion?.version_hcs_message_id || activeVersion?.hcs_message_id || null,
+    },
+  };
+}
+
+function summarizePublicationState(publishedDataset, publishedVersion) {
+  const datasetVisible = Boolean(
+    publishedDataset?.entity_id || publishedDataset?.proof_date || publishedDataset?.created_at
+  );
+  const versionVisible = Boolean(
+    publishedVersion?.entity_id || publishedVersion?.proof_date || publishedVersion?.created_at
+  );
+
+  if (datasetVisible && versionVisible) return "Dataset and active version are published.";
+  if (datasetVisible) return "Dataset-level publication is visible.";
+  if (versionVisible) return "Active version publication is visible.";
+  return "No publication payload is currently visible.";
 }
 
 export default function DatasetDetailPage() {
@@ -298,7 +351,34 @@ export default function DatasetDetailPage() {
         throw new Error("Dataset not found.");
       }
 
-      setBundle(normalized);
+      const certificateLookup = buildDatasetCertificateLookup(normalized);
+
+      let resolvedCertificate = null;
+      let resolvedCertificateExists = false;
+
+      if (certificateLookup) {
+        const existingPayload = await fetchJsonOrThrow("/v1/certificates/existing", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            certificate_kind: "dataset_certificate",
+            proof_date: certificateLookup.proof_date,
+            subject: certificateLookup.subject,
+          }),
+        }).catch(() => null);
+
+        resolvedCertificateExists = Boolean(existingPayload?.result?.exists);
+        resolvedCertificate = existingPayload?.result?.nft || null;
+      }
+
+      setBundle({
+        ...normalized,
+        resolvedCertificateLookup: certificateLookup,
+        resolvedCertificateExists,
+        resolvedCertificate,
+      });
     } catch (err) {
       setBundle(null);
       setPageError(err?.message || "Failed to load dataset.");
@@ -316,6 +396,9 @@ export default function DatasetDetailPage() {
   const activeVersion = bundle?.activeVersion || {};
   const published = bundle?.published || {};
   const certificate = bundle?.certificate || {};
+  const resolvedCertificate = bundle?.resolvedCertificate || null;
+  const resolvedCertificateLookup = bundle?.resolvedCertificateLookup || null;
+  const resolvedCertificateExists = Boolean(bundle?.resolvedCertificateExists);
 
   const resolvedDatasetKey = String(
     pickFirstValue(
@@ -337,10 +420,7 @@ export default function DatasetDetailPage() {
     )
   );
 
-  const visibility = getVisibility(
-    pickFirstValue(dataset?.visibility, manifest?.visibility)
-  );
-
+  const visibility = getVisibility(pickFirstValue(dataset?.visibility, manifest?.visibility));
   const status = getStatus(dataset, activeVersion);
   const trust = getTrustState(dataset, activeVersion);
 
@@ -385,11 +465,7 @@ export default function DatasetDetailPage() {
   const rowCount = pickFirstNumber(activeVersion?.row_count, dataset?.row_count);
   const colCount = pickFirstNumber(activeVersion?.col_count, dataset?.col_count);
 
-  const datasetHcsTopicId = pickFirstValue(
-    dataset?.dataset_hcs_topic_id,
-    dataset?.hcs_topic_id,
-    "—"
-  );
+  const datasetHcsTopicId = pickFirstValue(dataset?.dataset_hcs_topic_id, dataset?.hcs_topic_id, "—");
 
   const datasetHcsTransactionId = pickFirstValue(
     dataset?.dataset_hcs_transaction_id,
@@ -421,11 +497,7 @@ export default function DatasetDetailPage() {
     "—"
   );
 
-  const ingestSource = pickFirstValue(
-    dataset?.ingest_source,
-    activeVersion?.ingest_source,
-    "—"
-  );
+  const ingestSource = pickFirstValue(dataset?.ingest_source, activeVersion?.ingest_source, "—");
 
   const evidencePointer = pickFirstValue(
     bundle?.raw?.datasetRoot?.receipt?.pointers?.evidence_pointer,
@@ -443,20 +515,29 @@ export default function DatasetDetailPage() {
   const publishedVersion = published?.published?.dataset_version || {};
 
   const certificateIssued = Boolean(
-    certificate?.issued ||
-    certificate?.certificate?.issued ||
-    certificate?.ok
+    resolvedCertificateExists ||
+      resolvedCertificate?.nft_id ||
+      certificate?.issued ||
+      certificate?.certificate?.issued ||
+      certificate?.ok
   );
 
-  const certificateNft =
-    certificate?.certificate?.nft ||
-    certificate?.nft ||
+  const certificateNft = resolvedCertificate || certificate?.certificate?.nft || certificate?.nft || null;
+
+  const certificatePayload = certificate?.certificate?.certificate || certificate?.certificate || null;
+
+  const certificateProofDate =
+    resolvedCertificateLookup?.proof_date ||
+    certificateNft?.proof_date ||
+    certificatePayload?.proof_date ||
     null;
 
-  const certificatePayload =
-    certificate?.certificate?.certificate ||
-    certificate?.certificate ||
-    null;
+  const certificateDetailHref =
+    certificateNft?.nft_id && certificateProofDate
+      ? `/app/certificates/${encodeURIComponent(certificateNft.nft_id)}/${encodeURIComponent(
+          certificateProofDate
+        )}`
+      : null;
 
   const trustIcon =
     visibility === "public"
@@ -466,6 +547,8 @@ export default function DatasetDetailPage() {
         : visibility === "private"
           ? Lock
           : Database;
+
+  const publicationSummary = summarizePublicationState(publishedDataset, publishedVersion);
 
   return (
     <div className="space-y-6">
@@ -479,12 +562,15 @@ export default function DatasetDetailPage() {
             <span>Detail</span>
           </div>
 
-          <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-            {displayName}
-          </h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">{displayName}</h1>
 
           <p className="font-mono text-sm text-muted-foreground break-all">
             {resolvedDatasetKey || datasetKey || "unknown"}
+          </p>
+
+          <p className="max-w-3xl text-sm text-muted-foreground">
+            Review the current registered dataset state, active material binding, trust-layer
+            anchors, publication posture, and certificate outcome for this dataset.
           </p>
         </div>
 
@@ -507,6 +593,15 @@ export default function DatasetDetailPage() {
               Local-first submit
             </Link>
           </Button>
+
+          {certificateDetailHref ? (
+            <Button asChild>
+              <Link to={certificateDetailHref}>
+                <Award className="mr-2 h-4 w-4" />
+                Open certificate
+              </Link>
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -537,7 +632,7 @@ export default function DatasetDetailPage() {
             <EntitySummaryCard
               title="Trust state"
               value={trustLabel(trust)}
-              hint="Observed trust posture from the dataset and active version anchor state."
+              hint="Observed trust posture from the dataset row and the active version anchor state."
               icon={Link2}
             />
 
@@ -553,12 +648,41 @@ export default function DatasetDetailPage() {
               value={certificateIssued ? "Issued" : "Not issued"}
               hint={
                 certificateIssued
-                  ? "A dataset certificate was observed in the loaded payload."
-                  : "No issued dataset certificate was observed in the loaded payload."
+                  ? "A dataset certificate was deterministically resolved for the active dataset version."
+                  : "No dataset certificate was resolved for the active dataset version."
               }
               icon={Award}
             />
           </div>
+
+          <EntitySection
+            title="Overview"
+            description="The shortest useful reading of this dataset for a judge, partner, or operator."
+          >
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+                <div className="text-sm font-semibold text-foreground/90">Registry posture</div>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  This dataset is currently <span className="font-medium text-foreground/90">{visibilityLabel(visibility)}</span>{" "}
+                  and its operational status is <span className="font-medium text-foreground/90">{statusLabel(status)}</span>.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+                <div className="text-sm font-semibold text-foreground/90">Trust posture</div>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  The active dataset state is currently assessed as{" "}
+                  <span className="font-medium text-foreground/90">{trustLabel(trust)}</span>{" "}
+                  based on observed HCS linkage and mirror-visible signals.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+                <div className="text-sm font-semibold text-foreground/90">Release posture</div>
+                <p className="mt-2 text-sm text-muted-foreground">{publicationSummary}</p>
+              </div>
+            </div>
+          </EntitySection>
 
           <EntitySection
             title="Dataset record"
@@ -568,6 +692,9 @@ export default function DatasetDetailPage() {
               <Badge variant={visibilityVariant(visibility)}>{visibilityLabel(visibility)}</Badge>
               <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>
               <Badge variant={trustVariant(trust)}>{trustLabel(trust)}</Badge>
+              <Badge variant={certificateIssued ? "success" : "outline"}>
+                {certificateIssued ? "Certificate issued" : "Certificate not issued"}
+              </Badge>
             </div>
 
             <EntityKeyValueGrid
@@ -588,13 +715,18 @@ export default function DatasetDetailPage() {
 
           <EntitySection
             title="Active material state"
-            description="Current active version and the material fingerprint state currently bound to this dataset key."
+            description="Current active version and the material fingerprint state bound to this dataset key."
           >
             <EntityKeyValueGrid
               items={[
                 { key: "active_version", label: "Version", value: String(activeVersionNumber) },
                 { key: "version_id", label: "Version id", value: activeVersion?.id, mono: true },
-                { key: "dataset_fingerprint", label: "Dataset fingerprint", value: datasetFingerprint, mono: true },
+                {
+                  key: "dataset_fingerprint",
+                  label: "Dataset fingerprint",
+                  value: datasetFingerprint,
+                  mono: true,
+                },
                 { key: "manifest_hash", label: "Manifest hash", value: manifestHash, mono: true },
                 { key: "schema_hash", label: "Schema hash", value: schemaHash, mono: true },
                 {
@@ -620,15 +752,25 @@ export default function DatasetDetailPage() {
 
           <EntitySection
             title="Trust and anchors"
-            description="Observed HCS linkage for the dataset record and active version. This is where you inspect whether lifecycle state made it into the trust layer."
+            description="Observed HCS linkage for the dataset record and active version."
           >
             <div className="grid gap-6 lg:grid-cols-2">
               <EntityKeyValueGrid
                 title="Dataset anchor"
                 items={[
                   { key: "dataset_hcs_topic_id", label: "Topic id", value: datasetHcsTopicId, mono: true },
-                  { key: "dataset_hcs_transaction_id", label: "Transaction id", value: datasetHcsTransactionId, mono: true },
-                  { key: "dataset_hcs_message_id", label: "Message id", value: datasetHcsMessageId, mono: true },
+                  {
+                    key: "dataset_hcs_transaction_id",
+                    label: "Transaction id",
+                    value: datasetHcsTransactionId,
+                    mono: true,
+                  },
+                  {
+                    key: "dataset_hcs_message_id",
+                    label: "Message id",
+                    value: datasetHcsMessageId,
+                    mono: true,
+                  },
                 ]}
               />
 
@@ -636,8 +778,45 @@ export default function DatasetDetailPage() {
                 title="Active version anchor"
                 items={[
                   { key: "version_hcs_topic_id", label: "Topic id", value: versionHcsTopicId, mono: true },
-                  { key: "version_hcs_transaction_id", label: "Transaction id", value: versionHcsTransactionId, mono: true },
-                  { key: "version_hcs_message_id", label: "Message id", value: versionHcsMessageId, mono: true },
+                  {
+                    key: "version_hcs_transaction_id",
+                    label: "Transaction id",
+                    value: versionHcsTransactionId,
+                    mono: true,
+                  },
+                  {
+                    key: "version_hcs_message_id",
+                    label: "Message id",
+                    value: versionHcsMessageId,
+                    mono: true,
+                  },
+                ]}
+              />
+            </div>
+          </EntitySection>
+
+          <EntitySection
+            title="Publication"
+            description="Visible publication state for this dataset and its active version."
+          >
+            <div className="grid gap-6 lg:grid-cols-2">
+              <EntityKeyValueGrid
+                title="Dataset publication"
+                items={[
+                  { key: "dataset_entity_id", label: "Entity id", value: publishedDataset?.entity_id || "—", mono: true },
+                  { key: "dataset_proof_date", label: "Proof date", value: publishedDataset?.proof_date || "—" },
+                  { key: "dataset_visibility", label: "Visibility", value: publishedDataset?.visibility || "—" },
+                  { key: "dataset_created_at", label: "Created at", value: formatDateTime(publishedDataset?.created_at) },
+                ]}
+              />
+
+              <EntityKeyValueGrid
+                title="Active version publication"
+                items={[
+                  { key: "version_entity_id", label: "Entity id", value: publishedVersion?.entity_id || "—", mono: true },
+                  { key: "version_proof_date", label: "Proof date", value: publishedVersion?.proof_date || "—" },
+                  { key: "version_visibility", label: "Visibility", value: publishedVersion?.visibility || "—" },
+                  { key: "version_created_at", label: "Created at", value: formatDateTime(publishedVersion?.created_at) },
                 ]}
               />
             </div>
@@ -645,51 +824,120 @@ export default function DatasetDetailPage() {
 
           <EntitySection
             title="Certificate"
-            description="Dataset certificate and NFT issuance details when present."
+            description="Deterministically resolved dataset certificate state for the active version."
           >
             {!certificateIssued && !certificateNft ? (
               <div className="rounded-2xl border border-border/60 bg-card/25 p-4 text-sm text-muted-foreground">
-                No issued dataset certificate was present in the currently loaded dataset payload.
+                No dataset certificate was resolved for the current active version.
               </div>
             ) : (
-              <div className="grid gap-6 lg:grid-cols-2">
-                <EntityKeyValueGrid
-                  title="Certificate summary"
-                  items={[
-                    { key: "issued", label: "Issued", value: certificateIssued ? "true" : "false" },
-                    { key: "nft_id", label: "NFT id", value: certificateNft?.nft_id || certificateNft?.id, mono: true },
-                    { key: "program", label: "Program", value: certificateNft?.program || "—" },
-                    { key: "wallet_address", label: "Wallet address", value: certificateNft?.wallet_address, mono: true },
-                    { key: "token_id", label: "Token id", value: certificateNft?.token_id, mono: true },
-                    {
-                      key: "serial_number",
-                      label: "Serial number",
-                      value: certificateNft?.serial_number != null ? String(certificateNft.serial_number) : "—",
-                    },
-                    { key: "minted_at", label: "Minted at", value: formatDateTime(certificateNft?.minted_at) },
-                    { key: "hcs_transaction_id", label: "Certificate HCS txn", value: certificateNft?.hcs_transaction_id, mono: true },
-                    { key: "hts_transaction_id", label: "Certificate HTS txn", value: certificateNft?.hts_transaction_id, mono: true },
-                  ]}
-                />
+              <>
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <EntityKeyValueGrid
+                    title="Certificate summary"
+                    items={[
+                      { key: "issued", label: "Issued", value: certificateIssued ? "true" : "false" },
+                      {
+                        key: "nft_id",
+                        label: "NFT id",
+                        value: certificateNft?.nft_id || certificateNft?.id || "—",
+                        mono: true,
+                      },
+                      { key: "program", label: "Program", value: certificateNft?.program || "—" },
+                      {
+                        key: "wallet_address",
+                        label: "Wallet address",
+                        value: certificateNft?.wallet_address || "—",
+                        mono: true,
+                      },
+                      { key: "token_id", label: "Token id", value: certificateNft?.token_id || "—", mono: true },
+                      {
+                        key: "serial_number",
+                        label: "Serial number",
+                        value:
+                          certificateNft?.serial_number != null
+                            ? String(certificateNft.serial_number)
+                            : "—",
+                      },
+                      { key: "proof_date", label: "Proof date", value: certificateProofDate || "—" },
+                      { key: "minted_at", label: "Minted at", value: formatDateTime(certificateNft?.minted_at) },
+                      {
+                        key: "hcs_transaction_id",
+                        label: "Certificate HCS txn",
+                        value: certificateNft?.hcs_transaction_id || "—",
+                        mono: true,
+                      },
+                      {
+                        key: "hts_transaction_id",
+                        label: "Certificate HTS txn",
+                        value: certificateNft?.hts_transaction_id || "—",
+                        mono: true,
+                      },
+                    ]}
+                  />
 
-                <EntityKeyValueGrid
-                  title="Certificate hashes"
-                  items={[
-                    { key: "result_hash", label: "Result hash", value: certificateNft?.result_hash || "—", mono: true },
-                    { key: "nft_hash", label: "NFT hash", value: certificateNft?.nft_hash || "—", mono: true },
-                    { key: "global_hash", label: "Global hash", value: certificateNft?.global_hash || "—", mono: true },
-                    { key: "payload_hash", label: "Payload hash", value: certificatePayload?.payload_hash || "—", mono: true },
-                    { key: "identity_hash", label: "Identity hash", value: certificatePayload?.identity_hash || "—", mono: true },
-                    { key: "proof_date", label: "Proof date", value: certificatePayload?.proof_date || certificateNft?.proof_date || "—" },
-                  ]}
-                />
-              </div>
+                  <EntityKeyValueGrid
+                    title="Certificate hashes"
+                    items={[
+                      {
+                        key: "result_hash",
+                        label: "Result hash",
+                        value: certificateNft?.result_hash || "—",
+                        mono: true,
+                      },
+                      {
+                        key: "nft_hash",
+                        label: "NFT hash",
+                        value: certificateNft?.nft_hash || "—",
+                        mono: true,
+                      },
+                      {
+                        key: "global_hash",
+                        label: "Global hash",
+                        value: certificateNft?.global_hash || "—",
+                        mono: true,
+                      },
+                      {
+                        key: "payload_hash",
+                        label: "Payload hash",
+                        value: certificatePayload?.payload_hash || "—",
+                        mono: true,
+                      },
+                      {
+                        key: "identity_hash",
+                        label: "Identity hash",
+                        value: certificatePayload?.identity_hash || "—",
+                        mono: true,
+                      },
+                      { key: "proof_date_hash", label: "Proof date", value: certificateProofDate || "—" },
+                    ]}
+                  />
+                </div>
+
+                {certificateDetailHref ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button asChild>
+                      <Link to={certificateDetailHref}>
+                        <Award className="mr-2 h-4 w-4" />
+                        Open certificate detail
+                      </Link>
+                    </Button>
+
+                    <Button asChild variant="outline">
+                      <Link to="/app/certificates">
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                        View all certificates
+                      </Link>
+                    </Button>
+                  </div>
+                ) : null}
+              </>
             )}
           </EntitySection>
 
           <EntitySection
             title="Metadata and raw structures"
-            description="Metadata and nested structures exposed to the authenticated actor."
+            description="Lower-level payloads visible to the current authenticated actor."
           >
             <div className="grid gap-6 lg:grid-cols-2">
               <div>
@@ -704,7 +952,11 @@ export default function DatasetDetailPage() {
                   Metadata schema
                 </div>
                 <JsonBlock
-                  value={pickFirstObject(activeVersion?.metadata_schema, dataset?.metadata_schema, manifest?.metadata_schema)}
+                  value={pickFirstObject(
+                    activeVersion?.metadata_schema,
+                    dataset?.metadata_schema,
+                    manifest?.metadata_schema
+                  )}
                   emptyLabel="No metadata schema"
                 />
               </div>
@@ -718,16 +970,16 @@ export default function DatasetDetailPage() {
 
               <div>
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Certificate payload
+                  Legacy embedded certificate payload
                 </div>
-                <JsonBlock value={certificate} emptyLabel="No certificate payload" />
+                <JsonBlock value={certificate} emptyLabel="No embedded certificate payload" />
               </div>
             </div>
           </EntitySection>
 
           <EntitySection
             title="What this page tells you"
-            description="This is the authoritative inspection page for a single dataset."
+            description="This is the inspection surface for a single dataset record."
           >
             <div className="grid gap-4 md:grid-cols-4">
               <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
@@ -736,7 +988,8 @@ export default function DatasetDetailPage() {
                   Stable identity
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  The dataset key is the durable registry identity. The dataset row describes the long-lived record that downstream workflows reference.
+                  The dataset key is the durable registry identity. This record is the long-lived
+                  object that downstream workflows reference.
                 </p>
               </div>
 
@@ -746,7 +999,8 @@ export default function DatasetDetailPage() {
                   Active material state
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  The active version, dataset fingerprint, manifest hash, schema hash, and artifact pointer describe the current material state bound to this dataset key.
+                  The active version, dataset fingerprint, manifest hash, schema hash, and artifact
+                  pointer describe the current material state bound to this dataset key.
                 </p>
               </div>
 
@@ -756,17 +1010,20 @@ export default function DatasetDetailPage() {
                   Trust posture
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Dataset and version HCS linkage show whether lifecycle events for this record have been anchored into the trust layer and whether mirror-visible verification is present.
+                  Dataset and version HCS linkage show whether lifecycle events for this record have
+                  been anchored into the trust layer.
                 </p>
               </div>
 
               <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
                   <ExternalLink className="h-4 w-4" />
-                  Real release state
+                  Release state
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  This page shows what a real user or partner needs to know: what the dataset is, what version is active, how it was anchored, whether it was published, and whether a certificate was issued.
+                  This page shows what an evaluator needs to know: what the dataset is, what version
+                  is active, how it was anchored, whether it was published, and whether a
+                  certificate exists.
                 </p>
               </div>
             </div>
@@ -774,7 +1031,7 @@ export default function DatasetDetailPage() {
 
           <EntitySection
             title="Current dataset posture"
-            description="How this dataset fits into the current product model."
+            description="How this dataset fits into the current HF product model."
           >
             <div className="grid gap-4 md:grid-cols-3">
               <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
@@ -783,7 +1040,8 @@ export default function DatasetDetailPage() {
                   Managed guided flow
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Guided anchor is the managed path for demos, operator-assisted runs, and early partner onboarding where HF can access the dataset root directly.
+                  Guided anchor is the managed path for demos, operator-assisted runs, and early
+                  partner onboarding where HF can access the dataset root directly.
                 </p>
               </div>
 
@@ -793,17 +1051,19 @@ export default function DatasetDetailPage() {
                   Local-first bridge
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Local-first submit is the bridge for users who compute deterministic evidence outside HF and then finalize anchored registry state through the platform.
+                  Local-first submit is the bridge for users who compute deterministic evidence
+                  outside HF and then finalize anchored registry state through the platform.
                 </p>
               </div>
 
               <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
                   <ScrollText className="h-4 w-4" />
-                  Registry inspection
+                  Inspection surface
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  This detail page is the inspection surface where users review identity, trust state, publication posture, and certificate output after either workflow completes.
+                  This detail page is where users review identity, trust state, publication posture,
+                  and certificate output after either workflow completes.
                 </p>
               </div>
             </div>

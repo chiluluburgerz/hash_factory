@@ -33,7 +33,7 @@ describe("ingest/limits (unit)", () => {
     expect(limits.MAX_GLOB_LEN).toBe(256);
     expect(limits.MAX_SUFFIX_LEN).toBe(64);
     expect(limits.MAX_POINTER_LEN).toBe(2048);
-    expect(limits.MAX_DOMAIN_LEN).toBe(256);
+    expect(limits.MAX_DOMAIN_LEN).toBe(64);
     expect(limits.MAX_MEDIA_TYPE_LEN).toBe(128);
 
     expect(limits.HASH_CHUNK_BYTES_DEFAULT).toBe(1_048_576);

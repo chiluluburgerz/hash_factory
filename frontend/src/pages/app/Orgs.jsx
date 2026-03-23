@@ -14,6 +14,7 @@ import {
 
 import useAppContext from "@/app/hooks/useAppContext.js";
 import EntitySection from "@/components/base/entity-section.jsx";
+import CollapsibleSection from "@/components/base/collapsible-section.jsx";
 import { Badge } from "@/components/base/badge";
 import { Button } from "@/components/base/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/base/card";
@@ -140,10 +141,12 @@ function normalizeMembersEnvelope(payload) {
   const root = payload?.result ?? payload ?? null;
 
   const items =
-    Array.isArray(root?.items) ? root.items :
-    Array.isArray(root?.rows) ? root.rows :
-    Array.isArray(root) ? root :
-    [];
+    Array.isArray(root?.items) && root.items.length > 0 ? root.items
+    : Array.isArray(root?.rows) && root.rows.length > 0 ? root.rows
+    : Array.isArray(root?.items) ? root.items
+    : Array.isArray(root?.rows) ? root.rows
+    : Array.isArray(root) ? root
+    : [];
 
   return {
     items,
@@ -167,74 +170,34 @@ function derivePolicyState(effectiveEntitlements, appEntitlements, membershipRol
     null
   );
 
-  const hfEnabled = asBool(
-    firstDefined(
-      effectiveEntitlements?.hf?.enabled,
-      effectiveEntitlements?.features?.hf?.enabled
-    ),
-    true
-  );
-
-  const datasetsEnabled = asBool(
-    firstDefined(
-      effectiveEntitlements?.hf?.datasets_enabled,
-      effectiveEntitlements?.features?.dataset_registry,
-      appEntitlements?.canUseDatasets
-    ),
-    true
-  );
-
-  const registryEnabled = asBool(
-    firstDefined(
-      effectiveEntitlements?.hf?.registry_enabled,
-      effectiveEntitlements?.explorer?.enabled
-    ),
-    true
-  );
-
   const explorerEnabled = asBool(
     firstDefined(
       effectiveEntitlements?.explorer?.enabled
     ),
-    registryEnabled
-  );
-
-  const sageEnabled = asBool(
-    firstDefined(
-      effectiveEntitlements?.sage?.enabled
-    ),
-    false
-  );
-
-  const canMintCertificates = asBool(
-    firstDefined(
-      effectiveEntitlements?.hf?.certificates_enabled,
-      effectiveEntitlements?.features?.nft_certificates?.enabled,
-      appEntitlements?.canMintCertificates
-    ),
-    false
-  );
-
-  const canUseIngest = asBool(
-    firstDefined(
-      effectiveEntitlements?.hf?.ingest_enabled,
-      effectiveEntitlements?.features?.dataset_ingest,
-      appEntitlements?.canUseIngest
-    ),
     true
+  );
+
+  const hederaEnabled = asBool(
+    firstDefined(
+      effectiveEntitlements?.hedera?.enabled
+    ),
+    false
+  );
+
+  const merkleEnabled = asBool(
+    firstDefined(
+      effectiveEntitlements?.merkle?.enabled
+    ),
+    false
   );
 
   const isTenantAdmin = String(membershipRole || "") === "tenant_admin";
 
   return {
     tier,
-    hfEnabled,
-    datasetsEnabled,
-    registryEnabled,
     explorerEnabled,
-    sageEnabled,
-    canMintCertificates,
-    canUseIngest,
+    hederaEnabled,
+    merkleEnabled,
     isTenantAdmin,
   };
 }
@@ -254,41 +217,6 @@ function SummaryCard({ icon: Icon, title, value, hint }) {
       </CardContent>
     </Card>
   );
-}
-
-function postureBadges(policy, membershipRole) {
-  return [
-    {
-      key: "explorer",
-      label: "explorer",
-      enabled: Boolean(policy?.explorerEnabled),
-    },
-    {
-      key: "sage",
-      label: "sage",
-      enabled: Boolean(policy?.sageEnabled),
-    },
-    {
-      key: "hf",
-      label: "hf",
-      enabled: Boolean(policy?.hfEnabled),
-    },
-    {
-      key: "hf-datasets",
-      label: "datasets",
-      enabled: Boolean(policy?.datasetsEnabled),
-    },
-    {
-      key: "hf-registry",
-      label: "registry",
-      enabled: Boolean(policy?.registryEnabled),
-    },
-    {
-      key: "role",
-      label: `role ${membershipRole || "unknown"}`,
-      enabled: String(membershipRole || "") === "tenant_admin",
-    },
-  ];
 }
 
 function parseMetadataInput(raw) {
@@ -334,7 +262,6 @@ export default function OrgPage() {
     name: "",
     slug: "",
     email: "",
-    wallet_address: "",
     description: "",
     metadataText: "",
   });
@@ -344,7 +271,6 @@ export default function OrgPage() {
       name: String(nextOrg?.name ?? ""),
       slug: String(nextOrg?.slug ?? ""),
       email: String(nextOrg?.email ?? ""),
-      wallet_address: String(nextOrg?.walletAddress ?? ""),
       description: String(nextOrg?.description ?? ""),
       metadataText: nextOrg?.metadata ? JSON.stringify(nextOrg.metadata, null, 2) : "",
     });
@@ -436,7 +362,6 @@ export default function OrgPage() {
         name: String(form.name || "").trim(),
         slug: String(form.slug || "").trim() || null,
         email: String(form.email || "").trim() || undefined,
-        wallet_address: String(form.wallet_address || "").trim() || null,
         description: String(form.description || "").trim() || null,
         metadata,
       };
@@ -615,7 +540,6 @@ export default function OrgPage() {
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Badge variant={statusVariant(orgStatus)}>{String(orgStatus || "unknown")}</Badge>
-                  <Badge variant={statusVariant(kycStatus)}>{`kyc ${String(kycStatus || "unknown")}`}</Badge>
                   <Badge variant={isTenantAdmin ? "success" : "outline"}>
                     {`role ${membership?.role || "unknown"}`}
                   </Badge>
@@ -634,46 +558,36 @@ export default function OrgPage() {
                   {shortWallet(orgWallet)}
                 </div>
                 <div className="mt-1 text-sm text-muted-foreground">
-                  {org?.walletAddress || appOrg?.walletAddress
-                    ? "Organization-linked wallet identity, if configured."
-                    : "Falling back to the current HF wallet context when no org wallet is stored."}
+                  Wallet Address
                 </div>
               </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              {postureBadges(policy, membership?.role).map((item) => (
-                <Badge key={item.key} variant={item.enabled ? "success" : "warn"}>
-                  {item.label} {item.enabled ? "enabled" : "restricted"}
-                </Badge>
-              ))}
             </div>
           </EntitySection>
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
+              icon={ShieldCheck}
+              title="Explorer"
+              value={policy.explorerEnabled ? "Enabled" : "Restricted"}
+              hint="Public explorer visibility for this org."
+            />
+            <SummaryCard
+              icon={Wallet}
+              title="Hedera"
+              value={policy.hederaEnabled ? "Enabled" : "Restricted"}
+              hint="Hedera-integrated workflows allowed by effective policy."
+            />
+            <SummaryCard
               icon={ScrollText}
-              title="HF access"
-              value={policy.hfEnabled ? "Enabled" : "Restricted"}
-              hint="Authenticated Hash Factory control-plane availability."
-            />
-            <SummaryCard
-              icon={Layers3}
-              title="Datasets"
-              value={policy.datasetsEnabled ? "Enabled" : "Restricted"}
-              hint="Tenant-side dataset workflows and registry-connected flows."
-            />
-            <SummaryCard
-              icon={Building2}
-              title="Registry"
-              value={policy.registryEnabled ? "Enabled" : "Restricted"}
-              hint="Registry-linked organization workflows and browse posture."
+              title="Merkle"
+              value={policy.merkleEnabled ? "Enabled" : "Restricted"}
+              hint="Merkle-linked trust and anchor flows."
             />
             <SummaryCard
               icon={Users}
-              title="Tenant admins"
+              title="Tenant admin"
               value={isTenantAdmin ? "Yes" : "No"}
-              hint="Whether this current actor can use admin-gated org routes."
+              hint="Whether this actor can use admin-gated org routes."
             />
           </div>
 
@@ -697,9 +611,11 @@ export default function OrgPage() {
             />
           </EntitySection>
 
-          <EntitySection
+          <CollapsibleSection
             title="Profile settings"
-            description="Lightweight tenant-admin edits for core organization identity fields."
+            description="Tenant-admin management for core organization identity fields."
+            defaultCollapsed={true}
+            toggleSide="right"
           >
             {!isTenantAdmin ? (
               <div className="rounded-2xl border border-border/60 bg-card/25 p-4 text-sm text-muted-foreground">
@@ -764,18 +680,6 @@ export default function OrgPage() {
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-foreground/90">Wallet address</label>
-                    <input
-                      type="text"
-                      value={form.wallet_address}
-                      onChange={(e) => updateForm("wallet_address", e.target.value)}
-                      disabled={!isEditing || saveBusy}
-                      className="w-full rounded-xl border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
-                      placeholder="0x..."
-                    />
-                  </div>
-
                   <div className="space-y-2 lg:col-span-2">
                     <label className="text-sm font-medium text-foreground/90">Description</label>
                     <textarea
@@ -806,43 +710,7 @@ export default function OrgPage() {
                 ) : null}
               </>
             )}
-          </EntitySection>
-
-          <EntitySection
-            title="KYC controls"
-            description="A small, explicit admin control for current KYC posture."
-          >
-            {!isTenantAdmin ? (
-              <div className="rounded-2xl border border-border/60 bg-card/25 p-4 text-sm text-muted-foreground">
-                Tenant-admin privileges are required to change KYC status.
-              </div>
-            ) : (
-              <>
-                <div className="flex flex-wrap gap-2">
-                  {["pending", "approved", "rejected"].map((value) => {
-                    const isCurrent = String(kycStatus) === value;
-                    return (
-                      <Button
-                        key={value}
-                        type="button"
-                        variant={isCurrent ? "default" : "outline"}
-                        disabled={kycBusy || isCurrent}
-                        onClick={() => void handleSetKyc(value)}
-                      >
-                        {kycBusy && !isCurrent ? "Working..." : value}
-                      </Button>
-                    );
-                  })}
-                </div>
-
-                {kycError ? (
-                  <div className="mt-4 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
-                    {kycError}
-                  </div>
-                ) : null}
-              </>
-            )}
-          </EntitySection>
+          </CollapsibleSection>
 
           <EntitySection
             title="Members"
@@ -917,16 +785,18 @@ export default function OrgPage() {
             )}
           </EntitySection>
 
-          <EntitySection
+          <CollapsibleSection
             title="Effective policy"
-            description="Derived organization policy currently shaping HF access and operational limits."
+            description="Derived organization policy currently shaping explorer, Hedera, and Merkle behavior."
+            defaultCollapsed={true}
+            toggleSide="right"
           >
             {entitlementsError ? (
               <div className="rounded-2xl border border-border/60 bg-card/25 p-4 text-sm text-muted-foreground">
                 {entitlementsError}
               </div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
                   <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
                     <ShieldCheck className="h-4 w-4" />
@@ -934,32 +804,42 @@ export default function OrgPage() {
                   </div>
                   <p className="mt-2 text-sm text-muted-foreground">
                     {policy.explorerEnabled
-                      ? "Public and read-oriented explorer posture is enabled for this org."
-                      : "Explorer posture is restricted for this org."}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-                    <ScrollText className="h-4 w-4" />
-                    Merkle / trust flows
-                  </div>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {policy.canUseIngest
-                      ? "Merkle-linked trust and ingest workflows are enabled under the current effective policy."
-                      : "Merkle-linked trust and ingest workflows are currently restricted."}
+                      ? "Read-oriented explorer access is enabled."
+                      : "Explorer access is restricted."}
                   </p>
                 </div>
 
                 <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
                   <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
                     <Wallet className="h-4 w-4" />
-                    HF limits
+                    Hedera
                   </div>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Max jobs/day: {effectiveEntitlements?.hf?.max_jobs_per_day ?? "—"}
-                    <br />
-                    Max input bytes: {effectiveEntitlements?.hf?.max_input_bytes ?? "—"}
+                    {policy.hederaEnabled
+                      ? "Hedera-backed flows are enabled."
+                      : "Hedera-backed flows are restricted."}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+                    <ScrollText className="h-4 w-4" />
+                    Merkle
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {policy.merkleEnabled
+                      ? "Merkle trust and anchor flows are enabled."
+                      : "Merkle trust and anchor flows are restricted."}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+                    <Layers3 className="h-4 w-4" />
+                    Billing
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Tier: {effectiveEntitlements?.billing?.tier ?? "—"}
                   </p>
                 </div>
               </div>
@@ -971,14 +851,19 @@ export default function OrgPage() {
                 emptyLabel="No effective policy returned"
               />
             </div>
-          </EntitySection>
+          </CollapsibleSection>
 
-          <EntitySection
-            title="Organization metadata"
-            description="Raw metadata associated with this organization."
-          >
-            <JsonBlock value={org?.metadata} emptyLabel="No metadata" />
-          </EntitySection>
+          {org?.metadata &&
+          typeof org.metadata === "object" &&
+          !Array.isArray(org.metadata) &&
+          Object.keys(org.metadata).length > 0 ? (
+            <EntitySection
+              title="Organization metadata"
+              description="Raw metadata associated with this organization."
+            >
+              <JsonBlock value={org.metadata} emptyLabel="No metadata" />
+            </EntitySection>
+          ) : null}
         </>
       )}
     </div>

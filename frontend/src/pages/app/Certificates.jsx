@@ -6,11 +6,11 @@ import {
   ScrollText,
   ShieldCheck,
   Database,
-  Link2,
   Wallet,
 } from "lucide-react";
 
 import EntitySection from "@/components/base/entity-section.jsx";
+import { Input } from "@/components/base/input";
 import { Button } from "@/components/base/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/base/card";
 import EntitySummaryCard from "@/components/entities/entity-summary-card.jsx";
@@ -28,7 +28,6 @@ import {
   CertificateKindBadge,
   CertificateStatusBadge,
   CertificateTrustBadge,
-  CertificateMirrorBadge,
   certificateMatchesQuery,
   normalizeCertificatesEnvelope,
   extractCertificateFromPayload,
@@ -44,14 +43,13 @@ import {
   toProofDateParam,
 } from "@/components/certificates/certificate-ui.jsx";
 
-function HoldingHeroCard({
-  config,
-  rows,
-  latest,
-  emptyLabel,
-}) {
+function hasObservedAnchor(row) {
+  return Boolean(row?.hcs_transaction_id || row?.hcs_topic_id);
+}
+
+function HoldingHeroCard({ config, rows, latest, emptyLabel }) {
   const mintedCount = rows.filter((row) => getCertificateStatus(row) === "minted").length;
-  const verifiedCount = rows.filter((row) => Boolean(row?.mirror_verified)).length;
+  const anchoredCount = rows.filter((row) => hasObservedAnchor(row)).length;
 
   return (
     <Card className="border-border/60 bg-card/35 backdrop-blur">
@@ -82,10 +80,10 @@ function HoldingHeroCard({
 
           <div className="rounded-xl border border-border/60 bg-background/40 p-3">
             <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Mirror verified
+              Anchored
             </div>
             <div className="mt-2 text-2xl font-semibold text-foreground">
-              {verifiedCount.toLocaleString()}
+              {anchoredCount.toLocaleString()}
             </div>
           </div>
         </div>
@@ -124,15 +122,16 @@ function HoldingHeroCard({
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <CertificateMirrorBadge row={latest} />
-                {latest?.nft_id && latest?.proof_date ? (
-                  <Link
-                    to={`/app/certificates/${encodeURIComponent(latest.nft_id)}/${encodeURIComponent(toProofDateParam(latest.proof_date))}`}
-                    className="text-sm font-medium text-foreground/90 underline underline-offset-4"
-                  >
-                    Open latest certificate
-                  </Link>
-                ) : null}
+              {latest?.nft_id && latest?.proof_date ? (
+                <Link
+                  to={`/app/certificates/${encodeURIComponent(latest.nft_id)}/${encodeURIComponent(
+                    toProofDateParam(latest.proof_date)
+                  )}`}
+                  className="text-sm font-medium text-foreground/90 underline underline-offset-4"
+                >
+                  Open latest certificate
+                </Link>
+              ) : null}
             </div>
           </div>
         )}
@@ -181,10 +180,7 @@ function CertificateHoldingsTable({ rows, emptyLabel }) {
             </TableCell>
 
             <TableCell className="min-w-[180px]">
-              <div className="flex flex-col gap-2">
-                <CertificateTrustBadge row={row} />
-                <CertificateMirrorBadge row={row} />
-              </div>
+              <CertificateTrustBadge row={row} />
             </TableCell>
 
             <TableCell className="min-w-[120px]">
@@ -210,7 +206,9 @@ function CertificateHoldingsTable({ rows, emptyLabel }) {
             <TableCell className="min-w-[160px]">
               {row?.nft_id && row?.proof_date ? (
                 <Link
-                  to={`/app/certificates/${encodeURIComponent(row.nft_id)}/${encodeURIComponent(toProofDateParam(row.proof_date))}`}
+                  to={`/app/certificates/${encodeURIComponent(row.nft_id)}/${encodeURIComponent(
+                    toProofDateParam(row.proof_date)
+                  )}`}
                   className="text-sm font-medium text-foreground/90 underline underline-offset-4"
                 >
                   Open detail
@@ -244,9 +242,7 @@ export default function CertificatesPage() {
       ]);
 
       const normalized = normalizeCertificatesEnvelope(listPayload);
-      const latestCertificate = latestPayload
-        ? extractCertificateFromPayload(latestPayload)
-        : null;
+      const latestCertificate = latestPayload ? extractCertificateFromPayload(latestPayload) : null;
 
       setRows(Array.isArray(normalized.certificates) ? normalized.certificates : []);
       setLatest(latestCertificate || null);
@@ -273,12 +269,11 @@ export default function CertificatesPage() {
     return {
       datasetRows: sortCertificatesNewestFirst(byHolding.dataset_certificate),
       merkleRows: sortCertificatesNewestFirst(byHolding.merkle_anchor_certificate),
-      otherRows: sortCertificatesNewestFirst(byHolding.other),
     };
   }, [visibleRows]);
 
   const overallCount = visibleRows.length;
-  const verifiedCount = visibleRows.filter((row) => Boolean(row?.mirror_verified)).length;
+  const anchoredCount = visibleRows.filter((row) => hasObservedAnchor(row)).length;
   const mintedCount = visibleRows.filter((row) => getCertificateStatus(row) === "minted").length;
   const tokenClassesHeld = [
     grouped.datasetRows.length > 0 ? "dataset" : null,
@@ -292,12 +287,10 @@ export default function CertificatesPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-2">
-          <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-            Certificates
-          </h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Certificates</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            View the Vera Anchor certificate assets held by the authenticated user, organized by
-            certificate token class and backed by proof, anchor, and mirror trust signals.
+            View the certificate NFTs held by the authenticated user, organized by certificate
+            class and surfaced with issuance and anchor-linked signals.
           </p>
         </div>
 
@@ -322,143 +315,80 @@ export default function CertificatesPage() {
           hint="Total visible certificate NFTs held by this authenticated actor."
           icon={Wallet}
         />
+
         <EntitySummaryCard
           title="Certificate classes"
           value={Number(tokenClassesHeld).toLocaleString()}
-          hint="How many of the two core Vera Anchor certificate token classes are currently held."
+          hint="How many of the two core certificate classes are represented in the current view."
           icon={ScrollText}
         />
+
         <EntitySummaryCard
           title="Minted"
           value={Number(mintedCount).toLocaleString()}
-          hint="Certificates with a completed minted lifecycle state."
+          hint="Certificates with a minted lifecycle state visible on the NFT row."
           icon={ShieldCheck}
         />
+
         <EntitySummaryCard
-          title="Mirror verified"
-          value={Number(verifiedCount).toLocaleString()}
-          hint="Certificates with confirmed mirror verification."
+          title="Anchored"
+          value={Number(anchoredCount).toLocaleString()}
+          hint="Certificates with visible HCS linkage on the NFT row."
           icon={Database}
         />
       </div>
 
-      <div className="flex flex-1 items-center gap-2 rounded-xl border border-border/60 bg-card/25 px-3 py-2">
-        <Search className="h-4 w-4 text-muted-foreground" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search within held certificates by dataset, anchor, nft id, token id, proof date, or hash"
-          className="w-full bg-transparent text-sm outline-none"
+      <Card className="border-border/60 bg-card/35 backdrop-blur">
+        <CardHeader>
+          <CardTitle className="text-base">Filter certificates</CardTitle>
+          <CardDescription>
+            Search by certificate kind, token id, wallet, NFT id, proof date, transaction id, or
+            subject summary.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search certificates"
+              className="pl-9"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <HoldingHeroCard
+          config={CERTIFICATE_TOKEN_CONFIG.dataset_certificate}
+          rows={grouped.datasetRows}
+          latest={latestDataset}
+          emptyLabel="No dataset certificates are currently visible in this account."
+        />
+
+        <HoldingHeroCard
+          config={CERTIFICATE_TOKEN_CONFIG.merkle_anchor_certificate}
+          rows={grouped.merkleRows}
+          latest={latestMerkle}
+          emptyLabel="No merkle anchor certificates are currently visible in this account."
         />
       </div>
 
       <EntitySection
-        title="Holdings by certificate token"
-        description="The two core Vera Anchor certificate assets currently held by the authenticated user."
+        title="All held certificates"
+        description="A complete view of visible certificates in the authenticated tenant context."
       >
         {isLoading ? (
           <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
-            Loading certificate holdings...
-          </div>
-        ) : (
-          <div className="grid gap-4 xl:grid-cols-2">
-            <HoldingHeroCard
-              config={CERTIFICATE_TOKEN_CONFIG.dataset_certificate}
-              rows={grouped.datasetRows}
-              latest={latestDataset}
-              emptyLabel="No dataset certificate holdings are currently visible for this user."
-            />
-
-            <HoldingHeroCard
-              config={CERTIFICATE_TOKEN_CONFIG.merkle_anchor_certificate}
-              rows={grouped.merkleRows}
-              latest={latestMerkle}
-              emptyLabel="No merkle anchor certificate holdings are currently visible for this user."
-            />
-          </div>
-        )}
-      </EntitySection>
-
-      <EntitySection
-        title="Dataset certificate holdings"
-        description={`${CERTIFICATE_TOKEN_CONFIG.dataset_certificate.displayName} • ${CERTIFICATE_TOKEN_CONFIG.dataset_certificate.symbol} • ${CERTIFICATE_TOKEN_CONFIG.dataset_certificate.tokenId}`}
-      >
-        {isLoading ? (
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
-            Loading dataset certificate holdings...
+            Loading certificates...
           </div>
         ) : (
           <CertificateHoldingsTable
-            rows={grouped.datasetRows}
-            emptyLabel="No dataset certificate holdings matched the current view."
+            rows={sortCertificatesNewestFirst(visibleRows)}
+            emptyLabel="No certificates matched the current filter."
           />
         )}
-      </EntitySection>
-
-      <EntitySection
-        title="Merkle anchor certificate holdings"
-        description={`${CERTIFICATE_TOKEN_CONFIG.merkle_anchor_certificate.displayName} • ${CERTIFICATE_TOKEN_CONFIG.merkle_anchor_certificate.symbol} • ${CERTIFICATE_TOKEN_CONFIG.merkle_anchor_certificate.tokenId}`}
-      >
-        {isLoading ? (
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
-            Loading merkle anchor certificate holdings...
-          </div>
-        ) : (
-          <CertificateHoldingsTable
-            rows={grouped.merkleRows}
-            emptyLabel="No merkle anchor certificate holdings matched the current view."
-          />
-        )}
-      </EntitySection>
-
-      {grouped.otherRows.length > 0 ? (
-        <EntitySection
-          title="Other certificate rows"
-          description="Visible certificate rows that do not map to the current two primary Vera Anchor certificate token ids."
-        >
-          <CertificateHoldingsTable
-            rows={grouped.otherRows}
-            emptyLabel="No additional certificate rows."
-          />
-        </EntitySection>
-      ) : null}
-
-      <EntitySection
-        title="Current posture"
-        description="Why this page is structured around holdings rather than generic search."
-      >
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Wallet className="h-4 w-4" />
-              Asset-centered
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Users should first see the certificate assets they actually hold, not be forced into an existence-check workflow.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Link2 className="h-4 w-4" />
-              Trust-visible
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Every held certificate row surfaces proof date, serial, anchor visibility, and mirror posture in one place.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Database className="h-4 w-4" />
-              Foundation-ready
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              This page can later absorb wallet-native token holdings or explorer links without changing the overall product model.
-            </p>
-          </div>
-        </div>
       </EntitySection>
     </div>
   );

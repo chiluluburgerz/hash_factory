@@ -23,10 +23,25 @@ function defaultContextValue() {
     },
     wallets: [],
     primaryWallet: null,
+    userKeyPublic: null,
     apiKeys: {
       total: 0,
       active: 0,
       rows: [],
+    },
+    firstIngest: {
+      completed: false,
+      completedAt: null,
+    },
+    topicReadiness: null,
+    setup: {
+      loaded: false,
+      loadError: null,
+      isReady: true,
+      blockingCount: 0,
+      completedCount: 0,
+      totalCount: 0,
+      tasks: [],
     },
     resourceErrors: {
       user: null,
@@ -34,16 +49,68 @@ function defaultContextValue() {
       entitlements: null,
       wallets: null,
       primaryWallet: null,
+      userKeyPublic: null,
       apiKeys: null,
+      topicReadiness: null,
     },
     refreshAppContext: async () => {},
+    markFirstIngestComplete: () => {},
   };
 }
 
-function derivePrimaryWallet(wallets, primaryWallet) {
-  if (primaryWallet) return primaryWallet;
-  if (!Array.isArray(wallets) || wallets.length === 0) return null;
-  return wallets.find((w) => w?.is_primary) || wallets[0] || null;
+function firstIngestStorageKey(userId, orgId) {
+  return `hf:first-ingest:${String(userId || "anon")}:${String(orgId || "no-org")}`;
+}
+
+function readFirstIngestState(userId, orgId) {
+  try {
+    const raw = window.localStorage.getItem(firstIngestStorageKey(userId, orgId));
+    if (!raw) return { completed: false, completedAt: null };
+    const parsed = JSON.parse(raw);
+    return {
+      completed: Boolean(parsed?.completed),
+      completedAt: parsed?.completedAt || null,
+    };
+  } catch {
+    return { completed: false, completedAt: null };
+  }
+}
+
+function writeFirstIngestState(userId, orgId, value) {
+  try {
+    window.localStorage.setItem(
+      firstIngestStorageKey(userId, orgId),
+      JSON.stringify({
+        completed: Boolean(value?.completed),
+        completedAt: value?.completedAt || null,
+      })
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function setupUnlockStorageKey(userId, orgId) {
+  return `hf:setup-unlocked:${String(userId || "anon")}:${String(orgId || "no-org")}`;
+}
+
+function readSetupUnlockState(userId, orgId) {
+  try {
+    return window.localStorage.getItem(setupUnlockStorageKey(userId, orgId)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeSetupUnlockState(userId, orgId, unlocked) {
+  try {
+    window.localStorage.setItem(
+      setupUnlockStorageKey(userId, orgId),
+      unlocked ? "true" : "false"
+    );
+  } catch {
+    // ignore
+  }
 }
 
 function normalizeUserEnvelope(payload) {
@@ -64,6 +131,49 @@ function normalizeUserEnvelope(payload) {
     role: row.role ?? row.org_role ?? "",
     walletAddress: row.wallet_address ?? null,
     kycStatus: row.kyc_status ?? null,
+    raw: row,
+  };
+}
+
+function normalizeTopicReadinessEnvelope(payload) {
+  const row = payload?.result ?? payload ?? null;
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+
+  const requiredTopicNames = Array.isArray(row.required_topic_names)
+    ? row.required_topic_names.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+
+  const presentTopicNames = Array.isArray(row.present_topic_names)
+    ? row.present_topic_names.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+
+  const missingTopicNames = Array.isArray(row.missing_topic_names)
+    ? row.missing_topic_names.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    orgId: row.org_id ?? null,
+    ready: Boolean(row.ready),
+    requiredTopicNames,
+    presentTopicNames,
+    missingTopicNames,
+    meta: {
+      requiredCount:
+        Number(
+          row?.meta?.required_count ??
+          requiredTopicNames.length
+        ) || 0,
+      presentCount:
+        Number(
+          row?.meta?.present_count ??
+          presentTopicNames.length
+        ) || 0,
+      missingCount:
+        Number(
+          row?.meta?.missing_count ??
+          missingTopicNames.length
+        ) || 0,
+    },
     raw: row,
   };
 }
@@ -91,28 +201,71 @@ function normalizeOrgEnvelope(payload) {
   };
 }
 
+function isWalletLike(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+
+  const id = String(row.id ?? "").trim();
+  const walletAddress = String(
+    row.wallet_address ?? row.address ?? row.evm_address ?? ""
+  ).trim();
+  const userId = String(row.user_id ?? "").trim();
+  const orgId = String(row.org_id ?? "").trim();
+
+  return Boolean(id || walletAddress || userId || orgId);
+}
+
 function normalizeWalletListEnvelope(payload) {
   if (!payload) return [];
 
   const root = payload?.result ?? payload ?? null;
 
-  if (Array.isArray(root)) return root;
-  if (Array.isArray(root?.items)) return root.items;
-  if (Array.isArray(root?.rows)) return root.rows;
+  const rows =
+    Array.isArray(root)
+      ? root
+      : Array.isArray(root?.items)
+        ? root.items
+        : Array.isArray(root?.rows)
+          ? root.rows
+          : Array.isArray(payload?.result?.items)
+            ? payload.result.items
+            : Array.isArray(payload?.result?.rows)
+              ? payload.result.rows
+              : Array.isArray(payload?.items)
+                ? payload.items
+                : Array.isArray(payload?.rows)
+                  ? payload.rows
+                  : [];
 
-  if (Array.isArray(payload?.result?.items)) return payload.result.items;
-  if (Array.isArray(payload?.result?.rows)) return payload.result.rows;
-  if (Array.isArray(payload?.items)) return payload.items;
-  if (Array.isArray(payload?.rows)) return payload.rows;
-
-  return [];
+  return rows.filter(isWalletLike);
 }
 
 function normalizeWalletEnvelope(payload) {
   if (!payload) return null;
   const root = payload?.result ?? payload ?? null;
-  if (!root || Array.isArray(root)) return null;
+  if (!isWalletLike(root)) return null;
   return root;
+}
+
+function derivePrimaryWallet(wallets, primaryWallet) {
+  const safeWallets = Array.isArray(wallets) ? wallets.filter(isWalletLike) : [];
+  const safePrimary = isWalletLike(primaryWallet) ? primaryWallet : null;
+
+  if (safePrimary) {
+    const matching = safeWallets.find((w) => {
+      if (safePrimary.id && w?.id) return String(w.id) === String(safePrimary.id);
+      const a = String(
+        safePrimary.wallet_address ?? safePrimary.address ?? safePrimary.evm_address ?? ""
+      ).trim().toLowerCase();
+      const b = String(
+        w?.wallet_address ?? w?.address ?? w?.evm_address ?? ""
+      ).trim().toLowerCase();
+      return a && b && a === b;
+    });
+    return matching || safePrimary;
+  }
+
+  if (safeWallets.length === 0) return null;
+  return safeWallets.find((w) => w?.is_primary) || safeWallets[0] || null;
 }
 
 function isApiKeyActive(row) {
@@ -160,6 +313,60 @@ function normalizeApiKeysEnvelope(payload) {
     active,
     rows,
   };
+}
+
+function normalizeUserKeyPublicEnvelope(payload) {
+  const row = payload?.result ?? payload ?? null;
+  if (!row || typeof row !== "object") return null;
+
+  const keyVersion =
+    row.key_version ??
+    row.version ??
+    row.current_key_version ??
+    null;
+
+  const publicKey =
+    row.public_key_pem ??
+    row.public_key ??
+    row.publicKey ??
+    row.key ??
+    null;
+
+  if (keyVersion == null && !publicKey) return null;
+
+  return {
+    keyVersion,
+    publicKey,
+    raw: row,
+  };
+}
+
+function hasReasonableProfile(user) {
+  const name = String(
+    user?.displayName ??
+    user?.raw?.name ??
+    ""
+  ).trim();
+
+  const slug = String(user?.raw?.slug ?? "").trim();
+
+  return name.length >= 3 && slug.length >= 1;
+}
+
+function hasReasonableOrgProfile(org) {
+  const name = String(org?.name ?? org?.raw?.name ?? "").trim();
+  const slug = String(org?.slug ?? org?.raw?.slug ?? "").trim();
+  const email = String(org?.email ?? org?.raw?.email ?? "").trim();
+
+  const hasValidName = name.length >= 3;
+  const hasValidSlug = slug.length >= 1;
+  const hasValidEmail = !email || /^[^@]+@[^@]+\.[^@]+$/.test(email);
+
+  return hasValidName && hasValidSlug && hasValidEmail;
+}
+
+function hasCompletedFirstIngest(firstIngest) {
+  return Boolean(firstIngest?.completed);
 }
 
 function readPath(obj, path) {
@@ -254,12 +461,157 @@ function normalizeEntitlementsEnvelope(payload, membershipRole = "", orgBillingT
   };
 }
 
+function deriveSetupState({
+  user,
+  org,
+  membership,
+  entitlements,
+  primaryWallet,
+  userKeyPublic,
+  firstIngest,
+  topicReadiness,
+  setupLoadError = null,
+  hasSetupUnlock = false,
+}) {
+  const isTenantAdmin = String(membership?.role ?? "") === "tenant_admin";
+  const hasProfile = hasReasonableProfile(user);
+  const hasOrgProfile = hasReasonableOrgProfile(org);
+  const hasWallet = Boolean(primaryWallet);
+  const hasUserKey = Boolean(userKeyPublic?.keyVersion || userKeyPublic?.publicKey);
+  const hasFirstIngest = hasCompletedFirstIngest(firstIngest);
+
+  const walletRequired = Boolean(entitlements?.canMintCertificates);
+  const userKeyRequired =
+    Boolean(entitlements?.canUseIngest || entitlements?.canUseDatasets);
+  const topicsRequired = Boolean(userKeyRequired);
+  const topicsReady = Boolean(topicReadiness?.ready);
+  const canManageTopics = Boolean(isTenantAdmin);
+  const firstIngestAvailable =
+    Boolean(user?.id && org?.id) &&
+    Boolean(entitlements?.canUseIngest) &&
+    (!walletRequired || hasWallet) &&
+    (!userKeyRequired || hasUserKey);
+
+  const tasks = [
+    {
+      id: "profile",
+      title: "Complete profile",
+      description: "Review your personal identity fields used across the workspace.",
+      status: hasProfile ? "complete" : "action_required",
+      required: false,
+      entitled: true,
+      actionable: true,
+      href: "/app/profile",
+    },
+    {
+      id: "org_profile",
+      title: "Review organization",
+      description: "Review and complete the tenant identity fields used across the workspace.",
+      status: hasOrgProfile ? "complete" : "action_required",
+      required: true,
+      entitled: true,
+      actionable: true,
+      href: "/app/org",
+    },
+    {
+      id: "user_key",
+      title: "Create encryption key",
+      description: isTenantAdmin
+        ? "Generate the user encryption key required for protected trust workflows."
+        : "Your org admin may need to generate your encryption key before protected workflows are available.",
+      status: hasUserKey ? "complete" : userKeyRequired ? "action_required" : "unavailable",
+      required: userKeyRequired,
+      entitled: userKeyRequired,
+      actionable: isTenantAdmin,
+      href: "/app/setup",
+    },
+    {
+      id: "topics",
+      title: "Bootstrap tenant topics",
+      description: isTenantAdmin
+        ? topicsReady
+          ? "Required tenant Hedera topics are present."
+          : "Initialize the Hedera topics required for tenant-scoped trust workflows."
+        : "Tenant topic setup is managed by your organization admin.",
+      status: !topicsRequired
+        ? "unavailable"
+        : topicsReady
+          ? "complete"
+          : canManageTopics
+            ? "action_required"
+            : "unknown",
+      required: topicsRequired,
+      entitled: topicsRequired,
+      actionable: canManageTopics,
+      href: "/app/setup",
+      readiness: topicReadiness
+        ? {
+            ready: topicsReady,
+            requiredTopicNames: topicReadiness.requiredTopicNames,
+            presentTopicNames: topicReadiness.presentTopicNames,
+            missingTopicNames: topicReadiness.missingTopicNames,
+            meta: topicReadiness.meta,
+          }
+        : null,
+    },
+    {
+      id: "wallet",
+      title: "Provision primary wallet",
+      description: "Create or select the wallet used for ownership-linked workflows.",
+      status: hasWallet ? "complete" : walletRequired ? "action_required" : "unavailable",
+      required: walletRequired,
+      entitled: walletRequired,
+      actionable: true,
+      href: "/app/wallets",
+    },
+    {
+      id: "first_ingest",
+      title: "Run your first ingest",
+      description: hasFirstIngest
+        ? "Your first guided ingest has been completed."
+        : "Walk through a simple text-based ingest, then verify it and inspect the resulting trust outputs.",
+      status: !firstIngestAvailable
+        ? "unavailable"
+        : hasFirstIngest
+          ? "complete"
+          : "action_required",
+      required: false,
+      entitled: Boolean(entitlements?.canUseIngest),
+      actionable: firstIngestAvailable,
+      skippable: true,
+      href: "/app/ingest/anchor?onboarding=first"
+    },
+  ];
+
+  const requiredCount = tasks.filter(
+    (task) => task.required && task.status !== "complete"
+  ).length;
+
+  const completedCount = tasks.filter((task) => task.status === "complete").length;
+
+  const currentlyReady = Boolean(user?.id && org?.id) && requiredCount === 0;
+  const shouldGate = !hasSetupUnlock && !currentlyReady;
+
+  return {
+    loaded: true,
+    loadError: setupLoadError,
+    isReady: currentlyReady,
+    isUnlocked: Boolean(hasSetupUnlock),
+    shouldGate,
+    blockingCount: requiredCount,
+    requiredCount,
+    completedCount,
+    totalCount: tasks.length,
+    tasks,
+  };
+}
+
 function toErrorInfo(err) {
   if (!err) return null;
   return {
     name: err.name || "Error",
     message: err.message || String(err),
-    status: err.status ?? null,
+    status: err.status ?? err.statusCode ?? null,
     url: err.url ?? null,
     payload: err.payload ?? null,
     responseText: err.responseText ?? "",
@@ -269,24 +621,64 @@ function toErrorInfo(err) {
   };
 }
 
-async function settleResource(label, fn) {
+function isNotFoundError(err) {
+  const status = Number(
+    err?.status ??
+    err?.statusCode ??
+    err?.payload?.statusCode ??
+    0
+  );
+
+  const code = String(err?.code ?? err?.payload?.code ?? "").trim().toUpperCase();
+  const message = String(err?.message ?? err?.payload?.message ?? "").trim().toLowerCase();
+
+  return (
+    status === 404 ||
+    code === "NOT_FOUND" ||
+    message === "not_found"
+  );
+}
+
+function isExpectedSetupAbsence(label, err) {
+  if (!isNotFoundError(err)) return false;
+  return label === "primaryWallet" || label === "userKeyPublic";
+}
+
+async function settleResource(label, fn, options = {}) {
+  const allow404 = options.allow404 === true;
+
   try {
     const payload = await fn();
     return { ok: true, payload, error: null, label };
   } catch (err) {
-    return { ok: false, payload: null, error: toErrorInfo(err), label };
+    const errorInfo = toErrorInfo(err);
+
+    if (allow404 && isExpectedSetupAbsence(label, errorInfo)) {
+      return { ok: true, payload: null, error: null, label };
+    }
+
+    return { ok: false, payload: null, error: errorInfo, label };
   }
 }
 
 export function AppContextProvider({ children }) {
   const [state, setState] = React.useState(defaultContextValue);
 
-  const load = React.useCallback(async () => {
-    setState((prev) => ({
-      ...prev,
-      isLoading: true,
-      error: null,
-    }));
+  const load = React.useCallback(async (options = {}) => {
+    const silent = options?.silent === true;
+
+    if (!silent) {
+      setState((prev) => ({
+        ...prev,
+        isLoading: true,
+        error: null,
+      }));
+    } else {
+      setState((prev) => ({
+        ...prev,
+        error: null,
+      }));
+    }
 
     const userResult = await settleResource("user", () => fetchJsonOrThrow("/v1/users/me"));
     const orgResult = await settleResource("org", () => fetchJsonOrThrow("/v1/orgs/me"));
@@ -322,6 +714,7 @@ export function AppContextProvider({ children }) {
           entitlements: null,
           wallets: null,
           primaryWallet: null,
+          userKeyPublic: null,
           apiKeys: null,
         },
       });
@@ -339,12 +732,29 @@ export function AppContextProvider({ children }) {
       entitlementsResult,
       walletsResult,
       primaryWalletResult,
+      userKeyPublicResult,
       apiKeysResult,
+      topicReadinessResult,
     ] = await Promise.all([
       settleResource("entitlements", () => fetchJsonOrThrow("/v1/org-entitlements/me")),
       settleResource("wallets", () => fetchJsonOrThrow("/v1/wallets/me")),
-      settleResource("primaryWallet", () => fetchJsonOrThrow("/v1/wallets/me/primary")),
+      settleResource(
+        "primaryWallet",
+        () => fetchJsonOrThrow("/v1/wallets/me/primary"),
+        { allow404: true }
+      ),
+      settleResource(
+        "userKeyPublic",
+        () => fetchJsonOrThrow("/user-keys/me/public"),
+        { allow404: true }
+      ),
       settleResource("apiKeys", () => fetchJsonOrThrow("/api-keys/my?limit=50&offset=0")),
+      org?.id
+        ? settleResource(
+            "topicReadiness",
+            () => fetchJsonOrThrow(`/v1/orgs/${encodeURIComponent(org.id)}/hedera/topics/readiness`)
+          )
+        : Promise.resolve({ ok: true, payload: null, error: null, label: "topicReadiness" }),
     ]);
 
     const entitlements = normalizeEntitlementsEnvelope(
@@ -353,18 +763,14 @@ export function AppContextProvider({ children }) {
       org?.billingTier ?? null
     );
 
-    const walletsFromList = normalizeWalletListEnvelope(walletsResult.payload);
+    const wallets = normalizeWalletListEnvelope(walletsResult.payload);
     const primaryWalletFromEndpoint = normalizeWalletEnvelope(primaryWalletResult.payload);
-
-    const wallets =
-      walletsFromList.length > 0
-        ? walletsFromList
-        : primaryWalletFromEndpoint
-          ? [primaryWalletFromEndpoint]
-          : [];
-
     const primaryWallet = derivePrimaryWallet(wallets, primaryWalletFromEndpoint);
+    const userKeyPublic = normalizeUserKeyPublicEnvelope(userKeyPublicResult.payload);
     const apiKeys = normalizeApiKeysEnvelope(apiKeysResult.payload);
+    const topicReadiness = normalizeTopicReadinessEnvelope(topicReadinessResult.payload);
+    const firstIngest = readFirstIngestState(user?.id, org?.id);
+    const priorSetupUnlock = readSetupUnlockState(user?.id, org?.id);
 
     const resourceErrors = {
       user: userResult.error,
@@ -372,14 +778,55 @@ export function AppContextProvider({ children }) {
       entitlements: entitlementsResult.error,
       wallets: walletsResult.error,
       primaryWallet: primaryWalletResult.error,
+      userKeyPublic: userKeyPublicResult.error,
       apiKeys: apiKeysResult.error,
+      topicReadiness: topicReadinessResult.error,
     };
 
-    const topLevelError =
-      resourceErrors.apiKeys ||
+    const setupLoadError =
       resourceErrors.entitlements ||
       resourceErrors.wallets ||
-      resourceErrors.primaryWallet ||
+      resourceErrors.apiKeys ||
+      resourceErrors.topicReadiness ||
+      null;
+
+    const provisionalSetup = deriveSetupState({
+      user,
+      org,
+      membership,
+      entitlements,
+      primaryWallet,
+      userKeyPublic,
+      firstIngest,
+      topicReadiness,
+      setupLoadError: setupLoadError?.message || null,
+      hasSetupUnlock: priorSetupUnlock,
+    });
+
+    const nextSetupUnlock = priorSetupUnlock || provisionalSetup.isReady;
+
+    if (nextSetupUnlock !== priorSetupUnlock) {
+      writeSetupUnlockState(user?.id, org?.id, nextSetupUnlock);
+    }
+
+    const setup = deriveSetupState({
+      user,
+      org,
+      membership,
+      entitlements,
+      primaryWallet,
+      userKeyPublic,
+      firstIngest,
+      topicReadiness,
+      setupLoadError: setupLoadError?.message || null,
+      hasSetupUnlock: nextSetupUnlock,
+    });
+
+    const topLevelError =
+      resourceErrors.entitlements ||
+      resourceErrors.wallets ||
+      resourceErrors.apiKeys ||
+      resourceErrors.topicReadiness ||
       null;
 
     setState({
@@ -393,9 +840,65 @@ export function AppContextProvider({ children }) {
       entitlements,
       wallets,
       primaryWallet,
+      userKeyPublic,
       apiKeys,
+      firstIngest,
+      topicReadiness,
+      setup,
       resourceErrors,
       refreshAppContext: async () => {},
+      markFirstIngestComplete: () => {},
+    });
+  }, []);
+
+  const markFirstIngestComplete = React.useCallback(() => {
+    setState((prev) => {
+      const nextFirstIngest = {
+        completed: true,
+        completedAt: new Date().toISOString(),
+      };
+
+      writeFirstIngestState(prev.user?.id, prev.org?.id, nextFirstIngest);
+
+      const priorUnlock =
+        Boolean(prev.setup?.isUnlocked) ||
+        readSetupUnlockState(prev.user?.id, prev.org?.id);
+
+      const provisionalSetup = deriveSetupState({
+        user: prev.user,
+        org: prev.org,
+        membership: prev.membership,
+        entitlements: prev.entitlements,
+        primaryWallet: prev.primaryWallet,
+        userKeyPublic: prev.userKeyPublic,
+        firstIngest: nextFirstIngest,
+        topicReadiness: prev.topicReadiness,
+        setupLoadError: prev.setup?.loadError ?? null,
+        hasSetupUnlock: priorUnlock,
+      });
+
+      const nextSetupUnlock = priorUnlock || provisionalSetup.isReady;
+
+      if (nextSetupUnlock !== priorUnlock) {
+        writeSetupUnlockState(prev.user?.id, prev.org?.id, nextSetupUnlock);
+      }
+
+      return {
+        ...prev,
+        firstIngest: nextFirstIngest,
+        setup: deriveSetupState({
+          user: prev.user,
+          org: prev.org,
+          membership: prev.membership,
+          entitlements: prev.entitlements,
+          primaryWallet: prev.primaryWallet,
+          userKeyPublic: prev.userKeyPublic,
+          firstIngest: nextFirstIngest,
+          topicReadiness: prev.topicReadiness,
+          setupLoadError: prev.setup?.loadError ?? null,
+          hasSetupUnlock: nextSetupUnlock,
+        }),
+      };
     });
   }, []);
 
@@ -407,8 +910,9 @@ export function AppContextProvider({ children }) {
     () => ({
       ...state,
       refreshAppContext: load,
+      markFirstIngestComplete,
     }),
-    [state, load]
+    [state, load, markFirstIngestComplete]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

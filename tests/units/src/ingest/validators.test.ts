@@ -647,7 +647,7 @@ describe("ingest/validators (unit)", () => {
         run_id: "run-1",
       },
       core: {
-        anchor: {
+        receipt_anchor: {
           id: "anchor-1",
           status: "anchored",
         },
@@ -691,7 +691,7 @@ describe("ingest/validators (unit)", () => {
         run_id: "run-1",
       },
       core: {
-        anchor: {
+        receipt_anchor: {
           id: "anchor-1",
           status: "anchored",
         },

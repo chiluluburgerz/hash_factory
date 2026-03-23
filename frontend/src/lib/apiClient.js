@@ -42,7 +42,31 @@ function buildHttpError(message, meta = {}) {
   err.contentType = meta.contentType ?? "";
   err.contentLength = meta.contentLength ?? null;
   err.method = meta.method ?? "GET";
+  err.requestId =
+    meta.payload?.request_id ||
+    meta.payload?.requestId ||
+    meta.payload?.detail?.request_id ||
+    meta.payload?.detail?.requestId ||
+    null;
   return err;
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function shouldSerializeJsonBody(method, body) {
+  if (body == null) return false;
+  if (method === "GET" || method === "HEAD") return false;
+  if (typeof body === "string") return false;
+  if (body instanceof FormData) return false;
+  if (body instanceof URLSearchParams) return false;
+  if (body instanceof Blob) return false;
+  if (body instanceof ArrayBuffer) return false;
+  return isPlainObject(body) || Array.isArray(body);
 }
 
 export async function fetchJsonOrThrow(path, opts = {}) {
@@ -59,10 +83,18 @@ export async function fetchJsonOrThrow(path, opts = {}) {
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
 
+  let requestBody = opts.body;
+
+  if (shouldSerializeJsonBody(method, requestBody)) {
+    headers.set("Content-Type", "application/json");
+    requestBody = JSON.stringify(requestBody);
+  }
+
   const res = await fetch(url, {
     ...opts,
     method,
     headers,
+    body: requestBody,
     cache: "no-store",
   });
 

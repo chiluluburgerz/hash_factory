@@ -1,15 +1,17 @@
 // ============================================================================
 // File: src/lib/entitlements/hfOrgEntitlements.ts
-// Version: 1.0-hf-entitlements-helper | 2026-03-12
+// Version: 1.1-hf-entitlements-helper-hedera-policy | 2026-03-17
 // Purpose:
 //   Internal reusable HF entitlement helper layer.
 //   - Fetches effective org entitlements through Core via pass-through auth
-//   - Provides small reusable helpers for policy checks and wallet policy reads
+//   - Provides reusable helpers for policy checks and derived policy reads
 //   - Centralizes entitlement error mapping for downstream HF services/routes
 // Notes:
 //   - Internal-only. Do not expose this directly as a route.
 //   - Core remains source of truth for entitlement semantics.
 //   - HF uses this to avoid duplicating entitlement fetch/check logic.
+//   - Current effective-entitlement reads are tenant-admin/system-admin scoped,
+//     so callers must avoid using hard preflight for normal self-service flows.
 // ============================================================================
 
 import type { FastifyRequest } from "fastify";
@@ -37,6 +39,16 @@ export type HfEntitlementsOpts = Readonly<{
 }>;
 
 export type EffectiveEntitlements = Readonly<Record<string, unknown>>;
+
+export type HederaPolicy = Readonly<{
+  enabled: boolean;
+  allow_envelopes: boolean;
+  allow_topic_bootstrap: boolean;
+  allow_topic_list: boolean;
+  use_global_topics: boolean;
+  topic_allowlist: readonly string[];
+  max_topics: number;
+}>;
 
 export type TokenPolicy = Readonly<{
   enabled: boolean;
@@ -111,6 +123,15 @@ function toBool(v: unknown, dflt = false): boolean {
   return dflt;
 }
 
+function toInt(v: unknown, dflt = 0, min = 0, max = 10_000): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dflt;
+  const t = Math.trunc(n);
+  if (t < min) return min;
+  if (t > max) return max;
+  return t;
+}
+
 function getPath(obj: unknown, path: string): unknown {
   if (!obj || typeof obj !== "object") return undefined;
 
@@ -136,6 +157,24 @@ function getPath(obj: unknown, path: string): unknown {
   }
 
   return cur;
+}
+
+function normalizeStringList(v: unknown, maxItems = 512, itemMaxLen = 128): readonly string[] {
+  if (!Array.isArray(v)) return Object.freeze([]);
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of v) {
+    const s = String(raw ?? "").trim();
+    if (!s) continue;
+    const clipped = s.length > itemMaxLen ? s.slice(0, itemMaxLen) : s;
+    if (seen.has(clipped)) continue;
+    seen.add(clipped);
+    out.push(clipped);
+    if (out.length >= maxItems) break;
+  }
+
+  return Object.freeze(out);
 }
 
 export class HfEntitlements {
@@ -240,6 +279,67 @@ export class HfEntitlements {
       });
     }
 
+    return true;
+  }
+
+  async getHederaPolicy(
+    req: FastifyRequest,
+    actor: HfActor
+  ): Promise<HederaPolicy> {
+    const effective = await this.getCurrentEffective(req, actor);
+
+    const enabled = toBool(getPath(effective, "hedera.enabled"), false);
+    const allowEnvelopes = toBool(getPath(effective, "hedera.allow_envelopes"), false);
+    const allowTopicBootstrap = toBool(getPath(effective, "hedera.allow_topic_bootstrap"), false);
+    const allowTopicList = toBool(getPath(effective, "hedera.allow_topic_list"), false);
+    const useGlobalTopics = toBool(getPath(effective, "hedera.use_global_topics"), false);
+    const topicAllowlist = normalizeStringList(getPath(effective, "hedera.topic_allowlist"), 512, 128);
+    const maxTopics = toInt(getPath(effective, "hedera.max_topics"), 0, 0, 10_000);
+
+    return Object.freeze({
+      enabled,
+      allow_envelopes: enabled && allowEnvelopes,
+      allow_topic_bootstrap: enabled && allowTopicBootstrap,
+      allow_topic_list: enabled && allowTopicList,
+      use_global_topics: enabled && useGlobalTopics,
+      topic_allowlist: topicAllowlist,
+      max_topics: enabled ? maxTopics : 0,
+    });
+  }
+
+  async requireHederaEnabled(req: FastifyRequest, actor: HfActor): Promise<true> {
+    const pol = await this.getHederaPolicy(req, actor);
+    if (!pol.enabled) {
+      throw new HfEntitlementError("Hedera is not enabled for this organization", {
+        statusCode: 403,
+        code: "HEDERA_NOT_ENABLED",
+        detail: { path: "hedera.enabled" },
+      });
+    }
+    return true;
+  }
+
+  async requireHederaTopicList(req: FastifyRequest, actor: HfActor): Promise<true> {
+    const pol = await this.getHederaPolicy(req, actor);
+    if (!pol.allow_topic_list) {
+      throw new HfEntitlementError("Hedera topic listing is not enabled for this organization", {
+        statusCode: 403,
+        code: "HEDERA_TOPIC_LIST_NOT_ENABLED",
+        detail: { path: "hedera.allow_topic_list" },
+      });
+    }
+    return true;
+  }
+
+  async requireHederaTopicAdmin(req: FastifyRequest, actor: HfActor): Promise<true> {
+    const pol = await this.getHederaPolicy(req, actor);
+    if (!pol.allow_topic_bootstrap) {
+      throw new HfEntitlementError("Hedera topic administration is not enabled for this organization", {
+        statusCode: 403,
+        code: "HEDERA_TOPIC_ADMIN_NOT_ENABLED",
+        detail: { path: "hedera.allow_topic_bootstrap" },
+      });
+    }
     return true;
   }
 

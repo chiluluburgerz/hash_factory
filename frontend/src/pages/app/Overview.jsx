@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import {
   Building2,
   Wallet,
@@ -66,6 +67,7 @@ export default function OverviewPage() {
     apiKeys,
     resourceErrors,
     refreshAppContext,
+    setup,
   } = useAppContext();
 
   const apiKeysError = resourceErrors?.apiKeys ?? null;
@@ -88,6 +90,26 @@ export default function OverviewPage() {
           Reload context
         </Button>
       </div>
+
+      {!isLoading && !setup?.isReady ? (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-foreground">
+                Setup incomplete
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                Your workspace still has {Number(setup?.blockingCount ?? 0)} blocking setup task
+                {Number(setup?.blockingCount ?? 0) === 1 ? "" : "s"} before trust workflows are fully ready.
+              </div>
+            </div>
+
+            <Button asChild>
+              <Link to="/app/setup">Open setup</Link>
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <EntitySection
         title="Current context"

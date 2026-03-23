@@ -1,10 +1,11 @@
 // ============================================================================
 // File: src/routes/ingest.ts
-// Version: 1.0-hf-ingest-routes-v1 | 2026-03-06
+// Version: 1.1-hf-ingest-routes-v1-submit | 2026-03-20
 // Purpose:
 //   Fastify generic ingest routes for Hash Factory.
 //   - POST /v1/ingest/plan
 //   - POST /v1/ingest/execute
+//   - POST /v1/ingest/submit
 //   - POST /v1/ingest/verify
 // Security:
 //   - Auth required for all routes.
@@ -30,6 +31,7 @@ import { IngestError, IngestValidationError } from "../ingest/errors.js";
 import {
   parseIngestPlanRequestV1,
   parseIngestExecuteRequestV1,
+  parseIngestSubmitRequestV1,
   parseIngestVerifyRequestV1,
 } from "../ingest/validators.js";
 import {
@@ -344,6 +346,32 @@ const ingestRoutes: FastifyPluginAsync<IngestRoutesOpts> = async (app, opts) => 
       }
 
       const result = await orch.execute(parsed, coreCtx(req, actor, true));
+
+      return reply.code(200).send({ ok: true, result });
+    } catch (e) {
+      throw mapRouteError(e);
+    }
+  });
+
+  app.post("/v1/ingest/submit", { preHandler: requireAuth }, async (req, reply) => {
+    const actor = requireActor(req);
+    const body = requireBodyObject(req);
+
+    try {
+      requireTenantAdminOrSystem(actor);
+
+      const picked = pickBody(body, [
+        "mode",
+        "identity",
+        "evidence",
+        "metadata",
+        "evidence_pointer",
+        "domain",
+        "proof_date",
+      ]);
+
+      const parsed = parseIngestSubmitRequestV1(picked);
+      const result = await orch.submit(parsed, coreCtx(req, actor, true));
 
       return reply.code(200).send({ ok: true, result });
     } catch (e) {

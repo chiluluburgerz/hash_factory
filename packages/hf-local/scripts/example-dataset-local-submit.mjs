@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   executeDatasetAnchorLocalThenSubmit,
 } from "../dist/index.js";
@@ -13,6 +15,29 @@ const TEST_DISPLAY_NAME =
   process.env.TEST_DISPLAY_NAME || "HF local submit dataset test";
 const TEST_EVIDENCE_POINTER = process.env.TEST_EVIDENCE_POINTER || "";
 
+function timestampForDir() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function safeSegment(value, fallback) {
+  const s = String(value || "").trim();
+  if (!s) return fallback;
+  return s.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80) || fallback;
+}
+
+async function writeJson(filePath, value) {
+  await fs.writeFile(filePath, JSON.stringify(value, null, 2), "utf8");
+}
+
+async function prepareRunOutput(baseDir, label) {
+  const runDir = path.join(baseDir, `${timestampForDir()}-${label}`);
+  const latestDir = path.join(baseDir, "latest");
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.rm(latestDir, { recursive: true, force: true });
+  await fs.mkdir(latestDir, { recursive: true });
+  return { runDir, latestDir };
+}
+
 if (!HF_API_KEY) {
   throw new Error("Missing HF_API_KEY");
 }
@@ -26,6 +51,11 @@ if (!TEST_EVIDENCE_POINTER) {
 }
 
 async function main() {
+  const outputBaseDir = "./vera_anchor_dataset_receipts";
+  const outputLabel = safeSegment(TEST_DATASET_KEY, "dataset");
+  const { runDir, latestDir } = await prepareRunOutput(outputBaseDir, outputLabel);
+  const runMeta = { output_dir: runDir, latest_dir: latestDir };
+
   console.log("\n[1] Running local -> HF dataset submit flow...\n");
 
   const result = await executeDatasetAnchorLocalThenSubmit(
@@ -72,6 +102,20 @@ async function main() {
   const localReceipt = result.local.receipt;
   const remote = result.remote;
 
+  await writeJson(path.join(runDir, "local-receipt.json"), localReceipt);
+  await writeJson(path.join(runDir, "local-evidence.json"), localEvidence);
+  await writeJson(path.join(runDir, "remote-receipt.json"), remote.receipt);
+  await writeJson(path.join(runDir, "remote-bundle.json"), remote.evidence?.bundle ?? null);
+  await writeJson(path.join(runDir, "remote-payload.json"), remote);
+  await writeJson(path.join(runDir, "run-meta.json"), runMeta);
+
+  await writeJson(path.join(latestDir, "local-receipt.json"), localReceipt);
+  await writeJson(path.join(latestDir, "local-evidence.json"), localEvidence);
+  await writeJson(path.join(latestDir, "remote-receipt.json"), remote.receipt);
+  await writeJson(path.join(latestDir, "remote-bundle.json"), remote.evidence?.bundle ?? null);
+  await writeJson(path.join(latestDir, "remote-payload.json"), remote);
+  await writeJson(path.join(latestDir, "run-meta.json"), runMeta);
+
   console.log("[result summary]");
   console.log(
     JSON.stringify(
@@ -101,6 +145,22 @@ async function main() {
 
   console.log("\n[3] Full remote payload\n");
   console.log(JSON.stringify(remote, null, 2));
+
+  console.log("\n[4] Wrote verify inputs\n");
+  console.log("run dir:");
+  console.log(runDir);
+  console.log("\nlatest dir:");
+  console.log(latestDir);
+  console.log("\nrun local receipt:");
+  console.log(path.join(runDir, "local-receipt.json"));
+  console.log("\nrun local evidence:");
+  console.log(path.join(runDir, "local-evidence.json"));
+  console.log("\nrun remote receipt:");
+  console.log(path.join(runDir, "remote-receipt.json"));
+  console.log("\nrun remote bundle:");
+  console.log(path.join(runDir, "remote-bundle.json"));
+  console.log("\nrun remote payload:");
+  console.log(path.join(runDir, "remote-payload.json"));
 }
 
 main().catch((err) => {

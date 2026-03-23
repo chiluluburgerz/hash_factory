@@ -12,7 +12,9 @@ import apiKeysRoutes from "./apiKeys.js";
 import datasetsAnchorRoutes from "./datasetsAnchor.js";
 import datasetsReadRoutes from "./datasetsRead.js";
 import datasetsWriteRoutes from "./datasetsWrite.js";
+import hederaRoutes from "./hedera.js";
 import ingestRoutes from "./ingest.js";
+import merkleAnchorReadRoutes from "./merkleAnchorRead.js";
 import merkleAnchorWriteRoutes from "./merkleAnchorWrite.js";
 import merkleReadRoutes from "./merkleRead.js";
 import merkleWriteRoutes from "./merkleWrite.js";
@@ -27,6 +29,8 @@ import topicsRoutes from "./topics.js";
 import walletRoutes from "./wallets.js";
 import { smokeCoreRoutes } from "./smokeCore.js";
 import { CoreClient } from "../core/coreClient.js";
+import { makeCoreHedera } from "../core/hederaClient.js";
+import { HederaService } from "../services/hederaService.js";
 import { makeCoreMerkle } from "../core/merkleClient.js";
 import { makeCoreMerkleAnchor } from "../core/merkleAnchorClient.js";
 import { OnboardingService } from "../services/onboardingService.js";
@@ -65,6 +69,13 @@ export async function registerRoutes(app: FastifyInstance) {
   });
 
   const hfEntitlements = new HfEntitlements({ core });
+
+    const hederaClient = makeCoreHedera(core);
+
+    const hederaService = new HederaService({
+      hedera: hederaClient,
+      entitlements: hfEntitlements,
+    });
 
   // Datasets can return larger payloads (manifests, version rows, etc.).
   // Keep this client isolated so you can tune timeouts/limits without impacting other gateway routes.
@@ -133,6 +144,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // Route plugins
   // ---------------------------------------------------------------------------
   await app.register(smokeCoreRoutes, { core });
+  await app.register(hederaRoutes, { hederaService });
   await app.register(nftCertificateRoutes, { nftCertificateService });
   await app.register(orgEntitlementsRoutes, { orgEntitlementsService });
   await app.register(apiKeysRoutes, { core });
@@ -140,6 +152,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(datasetsReadRoutes, { datasets });
   await app.register(datasetsWriteRoutes, { datasets });
   await app.register(ingestRoutes, { merkleAnchor, merkle });
+  await app.register(merkleAnchorReadRoutes, { merkleAnchor });
   await app.register(merkleAnchorWriteRoutes, { merkleAnchor });
   await app.register(merkleReadRoutes, { merkle });
   await app.register(merkleWriteRoutes, { merkle });
@@ -148,6 +161,6 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(userKeysRoutes, { userKeys });
   await app.register(userRoutes, { userService });
   await app.register(tokenRoutes, { tokenService });
-  await app.register(topicsRoutes, { topics });
+  await app.register(topicsRoutes, { topics, hederaService });
   await app.register(walletRoutes, { walletService });
 }

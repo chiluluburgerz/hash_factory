@@ -11,7 +11,6 @@ import {
   Search,
   Layers3,
   Copy,
-  ExternalLink,
   ArrowRight,
   Link2,
   History,
@@ -26,9 +25,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import JsonBlock from "@/components/entities/json-block.jsx";
 import EntitySummaryCard from "@/components/entities/entity-summary-card.jsx";
 import { fetchJsonOrThrow } from "@/lib/apiClient.js";
-import HashscanButton from "@/components/hcs/hashscan-button.jsx";
-import { HcsTxLabel } from "@/components/hcs/hcs-tx-link.jsx";
-import MirrorStatusPill from "@/components/hcs/mirror-status-pill.jsx";
+import HashscanButton from "@/components/hedera/hashscan-button.jsx";
+import { HcsTxLabel } from "@/components/hedera/hcs-tx-link.jsx";
+import MirrorStatusPill from "@/components/hedera/mirror-status-pill.jsx";
 
 function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -37,11 +36,8 @@ function isPlainObject(value) {
 function parseJsonObjectInput(raw, emptyValue = null) {
   const text = String(raw || "").trim();
   if (!text) return emptyValue;
-
   const parsed = JSON.parse(text);
-  if (!isPlainObject(parsed)) {
-    throw new Error("Metadata must be a JSON object.");
-  }
+  if (!isPlainObject(parsed)) throw new Error("JSON must be an object.");
   return parsed;
 }
 
@@ -64,7 +60,6 @@ function deriveDatasetPosture(entitlements, membership) {
     Boolean(entitlements?.canAnchorDatasets) ||
     Boolean(entitlements?.canDatasetAnchor) ||
     canUseIngest;
-
   const isTenantAdmin = String(membership?.role || "") === "tenant_admin";
 
   return {
@@ -94,19 +89,14 @@ function SummaryCard({ icon: Icon, title, value, hint }) {
 
 function normalizePublishVisibility(value) {
   const raw = String(value || "").trim().toLowerCase();
-  if (!raw) return "";
   if (raw === "public" || raw === "unlisted") return raw;
   return "";
 }
 
 function collectDatasetRules(form) {
   const rules = {};
-  if (Boolean(form.followSymlinks)) {
-    rules.follow_symlinks = true;
-  }
-  if (Boolean(form.redactPaths)) {
-    rules.redact_paths = true;
-  }
+  if (Boolean(form.followSymlinks)) rules.follow_symlinks = true;
+  if (Boolean(form.redactPaths)) rules.redact_paths = true;
   return rules;
 }
 
@@ -122,7 +112,6 @@ function buildIdentity(form) {
 
 function buildPlanBody(form) {
   const rules = collectDatasetRules(form);
-
   return {
     mode: form.mode,
     identity: buildIdentity(form),
@@ -153,8 +142,7 @@ function buildExecuteBody(form) {
 }
 
 function validatePlanForm(form) {
-  const datasetKey = String(form.datasetKey || "").trim();
-  if (!datasetKey) throw new Error("Dataset key is required.");
+  if (!String(form.datasetKey || "").trim()) throw new Error("Dataset key is required.");
 }
 
 function validateExecuteForm(form) {
@@ -165,11 +153,9 @@ function validateExecuteForm(form) {
 
   if (!datasetKey) throw new Error("Dataset key is required.");
   if (!rootDir) throw new Error("Root directory is required.");
-
   if (mode === "register_and_anchor" && !evidencePointer) {
     throw new Error("Evidence pointer is required for register_and_anchor.");
   }
-
   parseJsonObjectInput(form.metadataText, {});
 }
 
@@ -182,7 +168,6 @@ function isExecuteReady(form, posture) {
   if (!datasetKey || !rootDir) return false;
   if (mode === "register_and_anchor" && !posture.canRegisterAndAnchor) return false;
   if (mode === "register_and_anchor" && !evidencePointer) return false;
-
   try {
     parseJsonObjectInput(form.metadataText, {});
     return true;
@@ -227,8 +212,12 @@ function summarizeTrust(core) {
   return {
     datasetCreated: Boolean(core?.dataset?.dataset_id || core?.dataset?.dataset_key),
     versionCreated: Boolean(core?.version?.id || core?.version?.dataset_key),
-    published: Boolean(core?.published?.published?.dataset || core?.published?.published?.dataset_version),
-    certificateIssued: Boolean(core?.certificate?.issued || core?.certificate?.certificate?.issued),
+    published: Boolean(
+      core?.published?.published?.dataset || core?.published?.published?.dataset_version
+    ),
+    certificateIssued: Boolean(
+      core?.certificate?.issued || core?.certificate?.certificate?.issued
+    ),
   };
 }
 
@@ -260,11 +249,8 @@ function TrustSummaryCard({ core }) {
     <Card className="border-border/60 bg-card/25">
       <CardHeader>
         <CardTitle className="text-base">Execution summary</CardTitle>
-        <CardDescription>
-          Fast outcome view for the current guided dataset anchor run.
-        </CardDescription>
+        <CardDescription>Outcome for the current guided anchor run.</CardDescription>
       </CardHeader>
-
       <CardContent>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
@@ -273,28 +259,24 @@ function TrustSummaryCard({ core }) {
               {summary.datasetCreated ? "Created / updated" : "Not present"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Version row</div>
             <div className="mt-1 font-semibold text-foreground/90">
               {summary.versionCreated ? "Created" : "Not present"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Publication</div>
             <div className="mt-1 font-semibold text-foreground/90">
               {summary.published ? "Published" : "Not published"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Certificate</div>
             <div className="mt-1 font-semibold text-foreground/90">
               {summary.certificateIssued ? "Issued" : "Not issued"}
             </div>
           </div>
-
           <div className="rounded-xl border border-border/60 bg-background/30 p-3">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Replay posture</div>
             <div className="mt-1 font-semibold text-foreground/90">
@@ -317,18 +299,11 @@ function HcsActionRow({ title, transactionId, messageId, verified = false, loadi
       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </div>
-
       <div className="mt-2 min-w-0">
         <HcsTxLabel id={primaryId} monoClassName="text-[0.72rem]" />
       </div>
-
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <MirrorStatusPill
-          hasAnchor={true}
-          mirrorVerified={verified}
-          loading={loading}
-          size="sm"
-        />
+        <MirrorStatusPill hasAnchor={true} mirrorVerified={verified} loading={loading} size="sm" />
         <HashscanButton id={primaryId} size="sm" />
       </div>
     </div>
@@ -353,24 +328,9 @@ function VerifyResultCards({ verifyResult }) {
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
-      <SummaryCard
-        icon={ScrollText}
-        title="Receipt verify"
-        value={cardValue(receiptVerify)}
-        hint={cardHint(receiptVerify)}
-      />
-      <SummaryCard
-        icon={Layers3}
-        title="Bundle verify"
-        value={cardValue(bundleVerify)}
-        hint={cardHint(bundleVerify)}
-      />
-      <SummaryCard
-        icon={FolderTree}
-        title="Local verify"
-        value={cardValue(localVerify)}
-        hint={cardHint(localVerify)}
-      />
+      <SummaryCard icon={ScrollText} title="Receipt verify" value={cardValue(receiptVerify)} hint={cardHint(receiptVerify)} />
+      <SummaryCard icon={Layers3} title="Bundle verify" value={cardValue(bundleVerify)} hint={cardHint(bundleVerify)} />
+      <SummaryCard icon={FolderTree} title="Local verify" value={cardValue(localVerify)} hint={cardHint(localVerify)} />
     </div>
   );
 }
@@ -405,10 +365,7 @@ export default function DatasetAnchorPage() {
     evidencePointer: "",
     publishVisibility: "public",
     setActive: true,
-    metadataText: `{
-  "source": "hf-ui",
-  "proof_date": "${today}"
-}`,
+    metadataText: `{\n  "source": "hf-ui",\n  "proof_date": "${today}"\n}`,
     followSymlinks: false,
     redactPaths: false,
     verifyReceiptText: "",
@@ -418,10 +375,7 @@ export default function DatasetAnchorPage() {
 
   React.useEffect(() => {
     if (!String(form.datasetKey || "").trim() && org?.id) {
-      setForm((prev) => ({
-        ...prev,
-        datasetKey: `${org.id}.sage.example.dataset.v1`,
-      }));
+      setForm((prev) => ({ ...prev, datasetKey: `${org.id}.sage.example.dataset.v1` }));
     }
   }, [org?.id, form.datasetKey]);
 
@@ -431,17 +385,10 @@ export default function DatasetAnchorPage() {
   const evidencePointerRequired = isAnchoredMode;
 
   const datasetKeyMissing =
-    (hasTriedPlan || hasTriedExecute) &&
-    !String(form.datasetKey || "").trim();
-
-  const rootDirMissing =
-    hasTriedExecute &&
-    !String(form.rootDir || "").trim();
-
+    (hasTriedPlan || hasTriedExecute) && !String(form.datasetKey || "").trim();
+  const rootDirMissing = hasTriedExecute && !String(form.rootDir || "").trim();
   const evidencePointerMissing =
-    hasTriedExecute &&
-    evidencePointerRequired &&
-    !String(form.evidencePointer || "").trim();
+    hasTriedExecute && evidencePointerRequired && !String(form.evidencePointer || "").trim();
 
   const metadataInvalid = React.useMemo(() => {
     if (!hasTriedExecute) return false;
@@ -456,10 +403,7 @@ export default function DatasetAnchorPage() {
   function updateForm(field, value) {
     setPageError("");
     setPageNotice("");
-    setForm((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+    setForm((prev) => ({ ...prev, [field]: value }));
   }
 
   function applyModeGuard(nextMode) {
@@ -479,14 +423,11 @@ export default function DatasetAnchorPage() {
 
     try {
       validatePlanForm(form);
-
-      const body = buildPlanBody(form);
       const payload = await fetchJsonOrThrow("/datasets/anchor/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildPlanBody(form)),
       });
-
       setPlanResult(payload);
       setPageNotice("Dataset anchor plan built successfully.");
       setActivePanel("plan");
@@ -496,7 +437,7 @@ export default function DatasetAnchorPage() {
         err?.payload?.upstream_detail?.message ||
         err?.payload?.message ||
         err?.message ||
-        "Failed to preview the guided dataset anchor plan."
+        "Failed to build the guided dataset anchor plan."
       );
     } finally {
       setBusyAction("");
@@ -516,17 +457,12 @@ export default function DatasetAnchorPage() {
       if (nextMode === "register_and_anchor" && !posture.canRegisterAndAnchor) {
         throw new Error("register_and_anchor requires tenant-admin or system-admin posture.");
       }
-
       validateExecuteForm({ ...form, mode: nextMode });
-
       const payload = await fetchJsonOrThrow("/datasets/anchor/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...buildExecuteBody({ ...form, mode: nextMode }),
-        }),
+        body: JSON.stringify(buildExecuteBody({ ...form, mode: nextMode })),
       });
-
       setExecuteResult(payload);
       setPageNotice(
         nextMode === "register_and_anchor"
@@ -571,7 +507,6 @@ export default function DatasetAnchorPage() {
           ...(rootDir ? { root_dir: rootDir } : {}),
         }),
       });
-
       setVerifyResult(payload);
       setPageNotice("Dataset verification completed.");
       setActivePanel("verify");
@@ -601,25 +536,22 @@ export default function DatasetAnchorPage() {
   const certTxnId =
     core?.certificate?.certificate?.nft?.hcs_transaction_id ||
     core?.certificate?.nft?.hcs_transaction_id;
-  const certTopicVerified = false;
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-2">
           <div className="text-sm text-muted-foreground">
-            <Link to="/app/datasets" className="hover:underline">
-              Datasets
-            </Link>
+            <Link to="/app/datasets" className="hover:underline">Datasets</Link>
             <span className="mx-2">/</span>
             <span>Guided anchor</span>
           </div>
-
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
             Guided dataset anchor
           </h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Run the HF-managed dataset anchor flow: preview the deterministic plan, hash from a dataset root available to the HF runtime, write registry-backed dataset state, and inspect the resulting trust, publication, and certificate posture.
+            Run the HF-managed dataset anchor flow: preview the plan, hash from a root available to the HF runtime, write registry-backed dataset state, and inspect the resulting trust, publication, and certificate posture.
           </p>
         </div>
 
@@ -628,7 +560,6 @@ export default function DatasetAnchorPage() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Reload context
           </Button>
-
           <Button asChild variant="outline">
             <Link to="/app/datasets/submit">
               <ScrollText className="mr-2 h-4 w-4" />
@@ -650,6 +581,7 @@ export default function DatasetAnchorPage() {
         </div>
       ) : null}
 
+      {/* Summary cards */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <EntitySummaryCard
           title="Dataset anchor access"
@@ -670,16 +602,17 @@ export default function DatasetAnchorPage() {
           icon={FolderTree}
         />
         <EntitySummaryCard
-          title="Actor"
+          title="User"
           value={user?.displayName || user?.email || "Authenticated user"}
           hint={`role ${membership?.role || "unknown"}`}
           icon={ScrollText}
         />
       </div>
 
+      {/* Workflow posture */}
       <EntitySection
         title="Workflow posture"
-        description="This page is the HF-managed dataset anchor flow. Use it when the dataset root is available to the HF runtime. Use local-first submit when evidence is computed outside HF and only the finalized evidence should be sent into the platform."
+        description="Use this page when the dataset root is available to the HF runtime. Use local-first submit when evidence is computed outside HF."
       >
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
@@ -688,20 +621,18 @@ export default function DatasetAnchorPage() {
               Managed runtime
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              HF reads the dataset root in its managed runtime, computes deterministic hashes and Merkle output, and keeps the raw dataset material out of registry requests.
+              HF reads the dataset root, computes deterministic hashes and Merkle output, and keeps raw material out of registry requests.
             </p>
           </div>
-
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
               <ShieldCheck className="h-4 w-4" />
               Registry-backed
             </div>
             <p className="mt-2 text-sm text-muted-foreground">
-              Anchored mode writes the dataset record, ingests a version, applies publication posture, and can surface certificate output when eligible.
+              Anchored mode writes the dataset record, ingests a version, applies publication posture, and surfaces certificate output when eligible.
             </p>
           </div>
-
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
               <FileCheck2 className="h-4 w-4" />
@@ -726,9 +657,10 @@ export default function DatasetAnchorPage() {
         </div>
       </EntitySection>
 
+      {/* Compose form */}
       <EntitySection
         title="Compose guided anchor request"
-        description="Define the dataset identity, HF-managed root directory, and any anchored publication inputs. The root directory must be available to the HF runtime."
+        description="Define the dataset identity, HF-managed root directory, and publication inputs. The root directory must be available to the HF runtime."
       >
         <div className="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
           <div className="space-y-6">
@@ -751,7 +683,7 @@ export default function DatasetAnchorPage() {
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  hash_only stays at deterministic evidence generation. register_and_anchor writes registry-backed dataset state.
+                  hash_only generates evidence only. register_and_anchor writes registry-backed dataset state.
                 </p>
               </div>
 
@@ -772,9 +704,7 @@ export default function DatasetAnchorPage() {
                     </Button>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Only used for anchored publication.
-                </p>
+                <p className="text-xs text-muted-foreground">Only used for anchored publication.</p>
               </div>
             </div>
 
@@ -791,9 +721,7 @@ export default function DatasetAnchorPage() {
                   placeholder="org.program.dataset.variant.v1"
                 />
                 {datasetKeyMissing ? (
-                  <p className="text-xs text-amber-300">
-                    Dataset key is required.
-                  </p>
+                  <p className="text-xs text-amber-300">Dataset key is required.</p>
                 ) : null}
               </div>
 
@@ -839,21 +767,19 @@ export default function DatasetAnchorPage() {
                   className={`w-full rounded-xl border bg-background px-3 py-2 font-mono text-sm outline-none ${
                     rootDirMissing ? "border-amber-500/60" : "border-border"
                   }`}
-                  placeholder="/absolute/path/to/dataset/root/available/to-hf"
+                  placeholder="/absolute/path/to/dataset/root"
                 />
                 <p className="text-xs text-muted-foreground">
-                  This path must be available to the HF-managed runtime. Use local-first submit if hashing will be performed on your own machine outside HF.
+                  Must be accessible to the HF-managed runtime. Use local-first submit if hashing is performed outside HF.
                 </p>
                 {rootDirMissing ? (
-                  <p className="text-xs text-amber-300">
-                    Root directory is required.
-                  </p>
+                  <p className="text-xs text-amber-300">Root directory is required.</p>
                 ) : null}
               </div>
 
               <div className="space-y-2 lg:col-span-2">
                 <label className="text-sm font-medium text-foreground/90">
-                  Evidence pointer {evidencePointerRequired ? "*" : ""}
+                  Evidence pointer{evidencePointerRequired ? " *" : ""}
                 </label>
                 <input
                   type="text"
@@ -866,7 +792,7 @@ export default function DatasetAnchorPage() {
                 />
                 <p className="text-xs text-muted-foreground">
                   {evidencePointerRequired
-                    ? "Required for register_and_anchor. This pointer identifies the durable artifact the anchored ingest flow should bind to."
+                    ? "Required for register_and_anchor. Identifies the durable artifact the anchored flow should bind."
                     : "Optional in hash_only mode."}
                 </p>
                 {evidencePointerMissing ? (
@@ -882,7 +808,6 @@ export default function DatasetAnchorPage() {
                 <FolderTree className="h-4 w-4" />
                 Dataset scan rules
               </div>
-
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="flex items-center gap-3 rounded-xl border border-border/60 bg-background/40 px-3 py-2 text-sm text-foreground/90">
                   <input
@@ -892,7 +817,6 @@ export default function DatasetAnchorPage() {
                   />
                   Follow symlinks
                 </label>
-
                 <label className="flex items-center gap-3 rounded-xl border border-border/60 bg-background/40 px-3 py-2 text-sm text-foreground/90">
                   <input
                     type="checkbox"
@@ -931,15 +855,13 @@ export default function DatasetAnchorPage() {
             </label>
           </div>
 
+          {/* Sidebar */}
           <div className="space-y-4">
             <Card className="border-border/60 bg-card/35 backdrop-blur">
               <CardHeader>
                 <CardTitle className="text-base">Request summary</CardTitle>
-                <CardDescription>
-                  Quick review before preview or execution.
-                </CardDescription>
+                <CardDescription>Review before preview or execution.</CardDescription>
               </CardHeader>
-
               <CardContent className="space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Mode</span>
@@ -947,40 +869,34 @@ export default function DatasetAnchorPage() {
                     {form.mode}
                   </Badge>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Dataset key</span>
                   <span className="font-mono text-xs text-foreground/90">{form.datasetKey || "—"}</span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Program</span>
                   <span className="text-foreground/90">{form.program || "—"}</span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Root path</span>
                   <span className="text-foreground/90">
                     {String(form.rootDir || "").trim() ? "Provided" : "Required"}
                   </span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Evidence pointer</span>
                   <span className="text-foreground/90">
                     {String(form.evidencePointer || "").trim()
                       ? "Provided"
                       : evidencePointerRequired
-                        ? "Required"
-                        : "Optional"}
+                      ? "Required"
+                      : "Optional"}
                   </span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Visibility</span>
                   <span className="text-foreground/90">{form.publishVisibility || "—"}</span>
                 </div>
-
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Set active</span>
                   <span className="text-foreground/90">{form.setActive ? "true" : "false"}</span>
@@ -992,10 +908,9 @@ export default function DatasetAnchorPage() {
               <CardHeader>
                 <CardTitle className="text-base">Actions</CardTitle>
                 <CardDescription>
-                  Preview the deterministic plan first, then execute the guided workflow you actually intend to run.
+                  Preview the plan first, then execute the workflow you intend to run.
                 </CardDescription>
               </CardHeader>
-
               <CardContent className="flex flex-col gap-3">
                 <Button
                   type="button"
@@ -1006,7 +921,6 @@ export default function DatasetAnchorPage() {
                   <Layers3 className="mr-2 h-4 w-4" />
                   {busyAction === "plan" ? "Previewing..." : "Preview plan"}
                 </Button>
-
                 <Button
                   type="button"
                   disabled={Boolean(busyAction) || !executeReady}
@@ -1016,10 +930,9 @@ export default function DatasetAnchorPage() {
                   {busyAction === "execute"
                     ? "Working..."
                     : form.mode === "register_and_anchor"
-                      ? "Run guided anchor"
-                      : "Run guided hash-only flow"}
+                    ? "Run guided anchor"
+                    : "Run hash-only flow"}
                 </Button>
-
                 <Button
                   type="button"
                   variant="outline"
@@ -1027,39 +940,24 @@ export default function DatasetAnchorPage() {
                   onClick={() => setActivePanel("verify")}
                 >
                   <Search className="mr-2 h-4 w-4" />
-                  Open verify panel
+                  Open verify workspace
                 </Button>
               </CardContent>
             </Card>
 
             <Card className="border-border/60 bg-card/35 backdrop-blur">
               <CardHeader>
-                <CardTitle className="text-base">Workflow notes</CardTitle>
-                <CardDescription>
-                  Keep the managed-runtime contract explicit.
-                </CardDescription>
+                <CardTitle className="text-base">Mode notes</CardTitle>
+                <CardDescription>What each mode does.</CardDescription>
               </CardHeader>
-
               <CardContent className="space-y-3 text-sm text-muted-foreground">
                 <div>
                   <div className="font-semibold text-foreground/90">hash_only</div>
-                  <div>
-                    Builds deterministic dataset evidence in the HF-managed runtime without writing dataset rows or requiring an evidence pointer.
-                  </div>
+                  <div>Builds deterministic evidence without writing registry state or requiring an evidence pointer.</div>
                 </div>
-
                 <div>
                   <div className="font-semibold text-foreground/90">register_and_anchor</div>
-                  <div>
-                    Requires elevated tenant posture plus an evidence pointer, then writes the dataset record, ingests the version, and can publish and certificate-enable the result.
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-semibold text-foreground/90">Need local hashing instead?</div>
-                  <div>
-                    Use the local-first submit page when evidence is produced outside HF and you only want to submit finalized evidence into the anchored registry flow.
-                  </div>
+                  <div>Requires elevated posture and an evidence pointer. Writes the dataset record, ingests the version, and publishes and certificate-enables when eligible.</div>
                 </div>
               </CardContent>
             </Card>
@@ -1067,6 +965,7 @@ export default function DatasetAnchorPage() {
         </div>
       </EntitySection>
 
+      {/* Result workspace */}
       <EntitySection
         title="Result workspace"
         description="Review preview output, execution output, or verify artifacts."
@@ -1092,7 +991,7 @@ export default function DatasetAnchorPage() {
           <div className="space-y-4">
             {!planResult ? (
               <div className="rounded-2xl border border-border/60 bg-card/25 p-6 text-sm text-muted-foreground">
-                No guided dataset anchor plan has been generated yet.
+                No plan has been generated yet.
               </div>
             ) : (
               <>
@@ -1103,10 +1002,9 @@ export default function DatasetAnchorPage() {
                     onClick={() => void handleExecute(form.mode)}
                   >
                     <Play className="mr-2 h-4 w-4" />
-                    {form.mode === "register_and_anchor" ? "Run guided anchor" : "Run guided hash-only flow"}
+                    {form.mode === "register_and_anchor" ? "Run guided anchor" : "Run hash-only flow"}
                   </Button>
                 </div>
-
                 <div className="grid gap-4 md:grid-cols-3">
                   <SummaryCard
                     icon={Layers3}
@@ -1127,7 +1025,6 @@ export default function DatasetAnchorPage() {
                     hint={Array.isArray(planResult?.result?.steps) ? planResult.result.steps.join(" → ") : "—"}
                   />
                 </div>
-
                 <JsonBlock value={planResult?.result ?? planResult} emptyLabel="No plan result" />
               </>
             )}
@@ -1149,11 +1046,14 @@ export default function DatasetAnchorPage() {
                     onClick={() => {
                       const latestReceipt = getLatestReceipt(executeResult);
                       const latestBundle = getLatestBundle(executeResult);
-
                       setForm((prev) => ({
                         ...prev,
-                        verifyReceiptText: latestReceipt ? JSON.stringify(latestReceipt, null, 2) : prev.verifyReceiptText,
-                        verifyBundleText: latestBundle ? JSON.stringify(latestBundle, null, 2) : prev.verifyBundleText,
+                        verifyReceiptText: latestReceipt
+                          ? JSON.stringify(latestReceipt, null, 2)
+                          : prev.verifyReceiptText,
+                        verifyBundleText: latestBundle
+                          ? JSON.stringify(latestBundle, null, 2)
+                          : prev.verifyBundleText,
                         verifyRootDir: prev.verifyRootDir || prev.rootDir,
                       }));
                       setActivePanel("verify");
@@ -1162,7 +1062,6 @@ export default function DatasetAnchorPage() {
                     <Search className="mr-2 h-4 w-4" />
                     Verify this result
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1173,7 +1072,6 @@ export default function DatasetAnchorPage() {
                     <ScrollText className="mr-2 h-4 w-4" />
                     Copy receipt
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1184,7 +1082,6 @@ export default function DatasetAnchorPage() {
                     <Copy className="mr-2 h-4 w-4" />
                     Copy bundle
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1194,7 +1091,6 @@ export default function DatasetAnchorPage() {
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Run again
                   </Button>
-
                   {datasetKeyFromResult ? (
                     <Button asChild>
                       <Link to={`/app/datasets/${encodeURIComponent(datasetKeyFromResult)}`}>
@@ -1247,18 +1143,16 @@ export default function DatasetAnchorPage() {
                     messageId={datasetMsgId}
                     verified={false}
                   />
-
                   <HcsActionRow
                     title="Dataset version transaction"
                     transactionId={versionTxnId}
                     messageId={versionMsgId}
                     verified={false}
                   />
-
                   <HcsActionRow
                     title="Certificate transaction"
                     transactionId={certTxnId}
-                    verified={certTopicVerified}
+                    verified={false}
                   />
                 </div>
 
@@ -1267,14 +1161,13 @@ export default function DatasetAnchorPage() {
                     <CardHeader>
                       <CardTitle className="text-base">Evidence</CardTitle>
                       <CardDescription>
-                        Deterministic dataset evidence emitted from guided HF execution.
+                        Deterministic dataset evidence emitted from the guided HF execution.
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
                       <JsonBlock value={evidence} emptyLabel="No evidence" />
                     </CardContent>
                   </Card>
-
                   <Card className="border-border/60 bg-card/25">
                     <CardHeader>
                       <CardTitle className="text-base">Receipt</CardTitle>
@@ -1292,7 +1185,7 @@ export default function DatasetAnchorPage() {
                   <CardHeader>
                     <CardTitle className="text-base">Core write output</CardTitle>
                     <CardDescription>
-                      Dataset row, version row, publication, certificate output, and replay posture returned by the guided HF dataset anchor flow.
+                      Dataset row, version row, publication, certificate output, and replay posture returned by the guided anchor flow.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1304,7 +1197,7 @@ export default function DatasetAnchorPage() {
                   <CardHeader>
                     <CardTitle className="text-base">Full execute response</CardTitle>
                     <CardDescription>
-                      Raw response returned by the HF guided dataset anchor execute route.
+                      Raw response returned by the guided dataset anchor execute route.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1328,7 +1221,6 @@ export default function DatasetAnchorPage() {
                     onClick={() => {
                       const latestReceipt = getLatestReceipt(executeResult);
                       if (!latestReceipt) return;
-
                       setForm((prev) => ({
                         ...prev,
                         verifyReceiptText: JSON.stringify(latestReceipt, null, 2),
@@ -1339,7 +1231,6 @@ export default function DatasetAnchorPage() {
                   >
                     Use latest receipt
                   </Button>
-
                   <Button
                     type="button"
                     variant="outline"
@@ -1347,7 +1238,6 @@ export default function DatasetAnchorPage() {
                     onClick={() => {
                       const latestBundle = getLatestBundle(executeResult);
                       if (!latestBundle) return;
-
                       setForm((prev) => ({
                         ...prev,
                         verifyBundleText: JSON.stringify(latestBundle, null, 2),
@@ -1392,7 +1282,11 @@ export default function DatasetAnchorPage() {
                 </div>
 
                 <div className="flex justify-end">
-                  <Button type="button" disabled={busyAction === "verify"} onClick={() => void handleVerify()}>
+                  <Button
+                    type="button"
+                    disabled={busyAction === "verify"}
+                    onClick={() => void handleVerify()}
+                  >
                     <Search className="mr-2 h-4 w-4" />
                     {busyAction === "verify" ? "Verifying..." : "Run verify"}
                   </Button>
@@ -1404,10 +1298,9 @@ export default function DatasetAnchorPage() {
                   <CardHeader>
                     <CardTitle className="text-base">Verify guidance</CardTitle>
                     <CardDescription>
-                      Re-check the returned receipt and bundle, and optionally compare them against source material.
+                      Re-check the returned receipt and bundle, and optionally compare against source material.
                     </CardDescription>
                   </CardHeader>
-
                   <CardContent className="space-y-3 text-sm text-muted-foreground">
                     <div>
                       <div className="font-semibold text-foreground/90">Receipt verify</div>
@@ -1433,7 +1326,7 @@ export default function DatasetAnchorPage() {
                 <CardHeader>
                   <CardTitle className="text-base">Verify response</CardTitle>
                   <CardDescription>
-                    Raw response returned by the HF dataset verify route.
+                    Raw response returned by the dataset verify route.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1443,43 +1336,6 @@ export default function DatasetAnchorPage() {
             ) : null}
           </div>
         ) : null}
-      </EntitySection>
-
-      <EntitySection
-        title="Recommended operator flow"
-        description="The highest-leverage guided dataset demo should feel obvious, trustworthy, and tightly connected to the registry."
-      >
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <FolderTree className="h-4 w-4" />
-              Start with a real managed root
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Use a meaningful dataset root that is actually available to the HF runtime so the fingerprint, bundle, and Merkle outputs reflect a real operator workflow.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <CheckCircle2 className="h-4 w-4" />
-              Bind to a real artifact pointer
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Anchored writes are strongest when the evidence pointer references the durable artifact you actually intend Core to ingest and publish.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <ExternalLink className="h-4 w-4" />
-              Follow through to detail
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              After a successful run, open the dataset detail page and inspect identity, HCS linkage, publication posture, certificate output, and downstream verification state.
-            </p>
-          </div>
-        </div>
       </EntitySection>
     </div>
   );
