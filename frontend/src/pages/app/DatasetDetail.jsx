@@ -307,6 +307,20 @@ function buildDatasetCertificateLookup(bundle) {
   };
 }
 
+function summarizePublicationState(publishedDataset, publishedVersion) {
+  const datasetVisible = Boolean(
+    publishedDataset?.entity_id || publishedDataset?.proof_date || publishedDataset?.created_at
+  );
+  const versionVisible = Boolean(
+    publishedVersion?.entity_id || publishedVersion?.proof_date || publishedVersion?.created_at
+  );
+
+  if (datasetVisible && versionVisible) return "Dataset and active version are published.";
+  if (datasetVisible) return "Dataset-level publication is visible.";
+  if (versionVisible) return "Active version publication is visible.";
+  return "No publication payload is currently visible.";
+}
+
 export default function DatasetDetailPage() {
   const { datasetKey } = useParams();
 
@@ -497,6 +511,9 @@ export default function DatasetDetailPage() {
   const updatedAt = pickFirstValue(dataset?.updated_at, manifest?.updated_at);
   const sealedAt = pickFirstValue(activeVersion?.sealed_at, dataset?.sealed_at);
 
+  const publishedDataset = published?.published?.dataset || {};
+  const publishedVersion = published?.published?.dataset_version || {};
+
   const certificateIssued = Boolean(
     resolvedCertificateExists ||
       resolvedCertificate?.nft_id ||
@@ -530,6 +547,8 @@ export default function DatasetDetailPage() {
         : visibility === "private"
           ? Lock
           : Database;
+
+  const publicationSummary = summarizePublicationState(publishedDataset, publishedVersion);
 
   return (
     <div className="space-y-6">
