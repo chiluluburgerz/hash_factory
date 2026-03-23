@@ -6,9 +6,10 @@ import {
   KeyRound,
   ShieldCheck,
   ScrollText,
-  Database,
   FlaskConical,
   RefreshCw,
+  Database,
+  ArrowRight,
 } from "lucide-react";
 
 import useAppContext from "@/app/hooks/useAppContext.js";
@@ -46,12 +47,21 @@ function SummaryCard({ icon: Icon, title, value, hint }) {
   );
 }
 
-function QuickActionCard({ title, description }) {
+function QuickActionCard({ icon: Icon, title, description, to }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-      <div className="text-sm font-semibold text-foreground/90">{title}</div>
+    <Link
+      to={to}
+      className="group rounded-2xl border border-border/60 bg-card/25 p-4 transition-colors hover:bg-card/50 hover:border-border/80 block"
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
+          {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+          {title}
+        </div>
+        <ArrowRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
       <div className="mt-1 text-sm text-muted-foreground">{description}</div>
-    </div>
+    </Link>
   );
 }
 
@@ -75,19 +85,18 @@ export default function OverviewPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="space-y-2">
+        <div className="space-y-1">
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
             Overview
           </h1>
-          <p className="max-w-3xl text-sm text-muted-foreground">
-            Your authenticated Hash Factory control plane for tenant-aware ingest,
-            ownership, verification, and trust workflows.
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Your Hash Factory control plane — ingest, anchor, verify, and manage your evidence workflows.
           </p>
         </div>
 
         <Button type="button" variant="outline" onClick={() => void refreshAppContext()}>
           <RefreshCw className="mr-2 h-4 w-4" />
-          Reload context
+          Refresh
         </Button>
       </div>
 
@@ -99,21 +108,20 @@ export default function OverviewPage() {
                 Setup incomplete
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
-                Your workspace still has {Number(setup?.blockingCount ?? 0)} blocking setup task
-                {Number(setup?.blockingCount ?? 0) === 1 ? "" : "s"} before trust workflows are fully ready.
+                {Number(setup?.blockingCount ?? 0)} blocking task
+                {Number(setup?.blockingCount ?? 0) === 1 ? "" : "s"} remaining before trust workflows are active.
               </div>
             </div>
-
             <Button asChild>
-              <Link to="/app/setup">Open setup</Link>
+              <Link to="/app/setup">Complete setup</Link>
             </Button>
           </div>
         </div>
       ) : null}
 
       <EntitySection
-        title="Current context"
-        description="The active authenticated user, organization, role, entitlement tier, and wallet posture."
+        title="Active context"
+        description="Your current organization, role, entitlement tier, and linked wallet."
       >
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
@@ -132,7 +140,7 @@ export default function OverviewPage() {
           <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <ShieldCheck className="h-3.5 w-3.5" />
-              User context
+              Signed in as
             </div>
             <div className="mt-2 text-lg font-semibold text-foreground/90">
               {user?.displayName || user?.email || "Authenticated user"}
@@ -177,92 +185,61 @@ export default function OverviewPage() {
           icon={Wallet}
           title="Wallets"
           value={Number(wallets?.length ?? 0).toLocaleString()}
-          hint="Linked wallet identities available in this tenant."
+          hint="Linked Hedera wallet identities."
         />
         <SummaryCard
           icon={KeyRound}
-          title="Active API Keys"
-          value={apiKeysError ? "ERROR" : Number(apiKeys?.active ?? 0).toLocaleString()}
+          title="Active API keys"
+          value={apiKeysError ? "Error" : Number(apiKeys?.active ?? 0).toLocaleString()}
           hint={
             apiKeysError
-              ? "API key lookup failed. See the global error banner above."
-              : "Currently active keys visible to this authenticated context."
+              ? "Key lookup failed — check the error banner."
+              : "Active keys for this account."
           }
         />
         <SummaryCard
           icon={FlaskConical}
-          title="Ingest Access"
+          title="Ingest"
           value={entitlements?.canUseIngest ? "Enabled" : "Restricted"}
-          hint="User-facing anchored ingest workflows through Hash Factory."
+          hint="Anchored ingest workflows through Hash Factory."
         />
         <SummaryCard
           icon={ScrollText}
-          title="Certificate Minting"
+          title="Certificates"
           value={entitlements?.canMintCertificates ? "Enabled" : "Restricted"}
-          hint="Controls issuance posture for proof-backed certificates."
+          hint="Proof-backed HTS certificate minting."
         />
       </div>
 
       <EntitySection
         title="Quick actions"
-        description="The first workflows to make demoable as HF UI comes online."
+        description="Jump directly into your most common workflows."
       >
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <QuickActionCard
-            title="Run ingest"
-            description="Build evidence, anchor a receipt, and surface trust results."
+            icon={FlaskConical}
+            title="Start ingest"
+            description="Submit and anchor a new evidence package."
+            to="/app/ingest/submit"
           />
           <QuickActionCard
-            title="Inspect datasets"
-            description="Review registry-backed dataset identities and trust metadata."
+            icon={Database}
+            title="View datasets"
+            description="Browse your anchored datasets and trust metadata."
+            to="/app/datasets"
           />
           <QuickActionCard
+            icon={Wallet}
             title="Manage wallets"
-            description="Link, review, and promote the user’s primary ownership wallet."
+            description="View and manage your linked Hedera wallets."
+            to="/app/wallets"
           />
           <QuickActionCard
-            title="Verify proofs"
-            description="Confirm receipts, bundles, and local object fingerprints."
+            icon={ShieldCheck}
+            title="Verify a proof"
+            description="Confirm receipts, bundles, and evidence fingerprints."
+            to="/app/verify"
           />
-        </div>
-      </EntitySection>
-
-      <EntitySection
-        title="What this console represents"
-        description="HF is the authenticated tenant-side control plane, not just a public explorer."
-      >
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <FlaskConical className="h-4 w-4" />
-              Write-capable trust workflows
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              HF is where tenant users initiate ingest, registration, verification,
-              and ownership-linked flows.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <Database className="h-4 w-4" />
-              Tenant-aware operating context
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Every workflow is grounded in user, org, role, wallet, and entitlement context.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-border/60 bg-card/25 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground/90">
-              <ShieldCheck className="h-4 w-4" />
-              Verifiable user-side trust
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              The goal is not only to show public evidence, but to let users create
-              and inspect it from their own authenticated surface.
-            </p>
-          </div>
         </div>
       </EntitySection>
     </div>
