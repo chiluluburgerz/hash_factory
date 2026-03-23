@@ -130,7 +130,7 @@ export default function ApiKeyGate({ onAuthenticated }) {
                         contact@veraanchor.com
                       </a>
                       .
-                    </div>
+                    </div> 
                   </div>
                 </div>
               </div>
