@@ -318,7 +318,7 @@ function summarizePublicationState(publishedDataset, publishedVersion) {
   if (datasetVisible && versionVisible) return "Dataset and active version are published.";
   if (datasetVisible) return "Dataset-level publication is visible.";
   if (versionVisible) return "Active version publication is visible.";
-  return "No publication payload is currently visible.";
+  return "This dataset is not currently published to the public explorer.";
 }
 
 export default function DatasetDetailPage() {
