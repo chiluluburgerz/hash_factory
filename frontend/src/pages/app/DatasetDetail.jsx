@@ -720,7 +720,6 @@ export default function DatasetDetailPage() {
             <EntityKeyValueGrid
               items={[
                 { key: "active_version", label: "Version", value: String(activeVersionNumber) },
-                { key: "version_id", label: "Version id", value: activeVersion?.id, mono: true },
                 {
                   key: "dataset_fingerprint",
                   label: "Dataset fingerprint",
