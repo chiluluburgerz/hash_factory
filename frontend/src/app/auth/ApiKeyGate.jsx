@@ -121,8 +121,15 @@ export default function ApiKeyGate({ onAuthenticated }) {
                       Early access
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      Hash Factory is currently in early access. If you are interested in
-                      access, visit{" "}
+                      Hash Factory is currently in early access. To request access, reach
+                      out to{" "}
+                      <a
+                        href="mailto:contact@veraanchor.com"
+                        className="font-medium text-foreground underline underline-offset-4"
+                      >
+                        contact@veraanchor.com
+                      </a>
+                      . To explore the public Vera Anchor platform, visit{" "}
                       <a
                         href="https://veraanchor.com"
                         target="_blank"
@@ -130,13 +137,6 @@ export default function ApiKeyGate({ onAuthenticated }) {
                         className="font-medium text-foreground underline underline-offset-4"
                       >
                         veraanchor.com
-                      </a>
-                      {" "}or reach out to{" "}
-                      <a
-                        href="mailto:contact@veraanchor.com"
-                        className="font-medium text-foreground underline underline-offset-4"
-                      >
-                        contact@veraanchor.com
                       </a>
                       .
                     </div>
@@ -192,7 +192,7 @@ export default function ApiKeyGate({ onAuthenticated }) {
                   >
                     Clear
                   </Button>
-                </div> 
+                </div>
               </form>
             </CardContent>
           </Card>
