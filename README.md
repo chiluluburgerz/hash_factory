@@ -14,9 +14,9 @@ Researchers and operators use Hash Factory to generate deterministic cryptograph
 
 1. A user submits an ingestion request through the HF UI or the `hf-local` SDK
 2. Hash Factory scans and hashes every file, builds a deterministic Merkle proof, and produces a dataset fingerprint
-3. The evidence bundle is anchored to Hedera via HCS — creating an immutable, timestamped on-chain record
+3. The evidence bundle is anchored to Hedera via HCS, creating an immutable, timestamped on-chain record
 4. An HTS NFT certificate is minted and transferred to the user's provisioned Hedera wallet as a portable proof asset
-5. Everything is verifiable — receipts, bundles, and HCS transactions can be independently verified
+5. Everything is verifiable: receipts, bundles, and HCS transactions can be independently verified
 
 ---
 
@@ -78,7 +78,7 @@ hash_factory/
 
 ## hf-local SDK
 
-`hf-local` is a local-first SDK for generating deterministic dataset evidence outside of Hash Factory. Raw data never leaves the user's machine — only derived evidence packages are submitted to HF.
+`hf-local` is a local-first SDK for generating deterministic dataset evidence outside of Hash Factory. Raw data never leaves the user's machin. Only derived evidence packages are submitted to HF.
 
 ```bash
 npm install hf-local
@@ -93,7 +93,7 @@ Full documentation: [npmjs.com/package/hf-local](https://www.npmjs.com/package/h
 This project is submitted to the **Hedera Apex Hackathon 2026 — Open Track**.
 
 To explore the live deployment, request an early access API key by contacting:
-**andrew@veraanchor.com**
+**contact@veraanchor.com**
 
 ---
 
