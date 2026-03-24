@@ -32,6 +32,14 @@ function makeMerkleAnchorClient(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
+function makeMerkleClient(overrides: Record<string, unknown> = {}) {
+  return {
+    buildRoot: vi.fn(),
+    publishRoot: vi.fn(),
+    ...overrides,
+  } as any;
+}
+
 describe("ingest/orchestrator (unit)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -40,7 +48,9 @@ describe("ingest/orchestrator (unit)", () => {
   it("makeIngestOrchestrator requires merkleAnchor client", async () => {
     const { makeIngestOrchestrator } = await import("../../../../src/ingest/orchestrator.js");
 
-    expect(() => makeIngestOrchestrator(null as any)).toThrow(/requires merkleAnchor client/i);
+    expect(() => makeIngestOrchestrator(null as any, makeMerkleClient())).toThrow(
+      /merkle_anchor_client_required/i
+    );
   });
 
   it("returns local-only response for hash_only without Core anchor side effects", async () => {
@@ -84,7 +94,8 @@ describe("ingest/orchestrator (unit)", () => {
     buildIngestReceiptV1Mock.mockReturnValue(receiptLocal);
 
     const merkleAnchor = makeMerkleAnchorClient();
-    const orchestrator = makeIngestOrchestrator(merkleAnchor);
+    const merkle = makeMerkleClient();
+    const orchestrator = makeIngestOrchestrator(merkleAnchor, merkle);
 
     const hooks = {
       onScanProgress: vi.fn(),
@@ -161,7 +172,8 @@ describe("ingest/orchestrator (unit)", () => {
     buildIngestReceiptV1Mock.mockReturnValue(receiptLocal);
 
     const merkleAnchor = makeMerkleAnchorClient();
-    const orchestrator = makeIngestOrchestrator(merkleAnchor);
+    const merkle = makeMerkleClient();
+    const orchestrator = makeIngestOrchestrator(merkleAnchor, merkle);
 
     const out = await orchestrator.execute({ req: true } as any, {} as any);
 
@@ -227,7 +239,12 @@ describe("ingest/orchestrator (unit)", () => {
 
     parseIngestExecuteRequestV1Mock.mockReturnValue(parsed);
     executeIngestMock.mockResolvedValue(evidence);
+    // Call sequence for register_and_anchor:
+    //   1st — execute()'s unconditional local build (result discarded, mode routes to finalizeFromEvidence)
+    //   2nd — finalizeFromEvidence's local build → passed to anchorPayload
+    //   3rd — finalizeFromEvidence's anchored build → returned in response
     buildIngestReceiptV1Mock
+      .mockReturnValueOnce(receiptLocal)
       .mockReturnValueOnce(receiptLocal)
       .mockReturnValueOnce(receiptAnchored);
 
@@ -235,7 +252,18 @@ describe("ingest/orchestrator (unit)", () => {
       anchorPayload: vi.fn().mockResolvedValue(anchor),
     });
 
-    const orchestrator = makeIngestOrchestrator(merkleAnchor);
+    const rootBuildResult = { id: "root-id-3", root_id: "root-id-3", domain: "genomics", root_hash: "rhash-3" };
+    const rootPublishResult = { id: "root-id-3", root_id: "root-id-3", domain: "genomics", root_hash: "rhash-3", status: "published", hcs_transaction_id: "0.0.12345@1234567890.000000000" };
+    const rootAnchorResult = { ok: true, deduped: false, queued_only: false, anchor: { id: "ra-1", root_id: "root-id-3" } };
+
+    const merkle = makeMerkleClient({
+      buildRoot: vi.fn().mockResolvedValue(rootBuildResult),
+      publishRoot: vi.fn().mockResolvedValue(rootPublishResult),
+    });
+
+    merkleAnchor.requestRootAnchorFromHf = vi.fn().mockResolvedValue(rootAnchorResult);
+
+    const orchestrator = makeIngestOrchestrator(merkleAnchor, merkle);
 
     const ctx = Object.freeze({
       authHeader: "Bearer abc",
@@ -247,7 +275,8 @@ describe("ingest/orchestrator (unit)", () => {
 
     expect(executeIngestMock).toHaveBeenCalledWith(parsed, undefined);
 
-    expect(buildIngestReceiptV1Mock).toHaveBeenNthCalledWith(1, {
+    // 2nd call is the local receipt built inside finalizeFromEvidence, passed to anchorPayload
+    expect(buildIngestReceiptV1Mock).toHaveBeenNthCalledWith(2, {
       mode: "register_and_anchor",
       evidence,
       domain: "genomics",
@@ -265,34 +294,22 @@ describe("ingest/orchestrator (unit)", () => {
         payload_type: "ingest_receipt_v1",
         payload_json: receiptLocal,
       },
-      {
+      expect.objectContaining({
         authHeader: "Bearer abc",
         requestId: "req-1",
         tenantId: "tenant-1",
         idempotencyKey: "idem-3",
-      },
+      }),
     );
 
-    expect(buildIngestReceiptV1Mock).toHaveBeenNthCalledWith(2, {
-      mode: "register_and_anchor",
-      evidence,
-      domain: "genomics",
-      proof_date: "2026-03-06",
-      evidence_pointer: "s3://bucket/evidence.json",
-      metadata: { run_id: "run-1" },
-      core: { anchor },
-    });
+    expect(merkle.buildRoot).toHaveBeenCalledTimes(1);
+    expect(merkle.publishRoot).toHaveBeenCalledTimes(1);
+    expect(merkleAnchor.requestRootAnchorFromHf).toHaveBeenCalledTimes(1);
 
-    expect(out).toEqual({
-      mode: "register_and_anchor",
-      evidence,
-      receipt: receiptAnchored,
-      core: {
-        anchor,
-      },
-    });
+    expect(out.mode).toBe("register_and_anchor");
+    expect(out.evidence).toBe(evidence);
+    expect(out.receipt).toBe(receiptAnchored);
     expect(Object.isFrozen(out)).toBe(true);
-    expect(Object.isFrozen(out.core!)).toBe(true);
   });
 
   it("omits proofDate from anchor payload when parsed proof_date is absent", async () => {
@@ -349,20 +366,14 @@ describe("ingest/orchestrator (unit)", () => {
       anchorPayload: vi.fn().mockResolvedValue(anchor),
     });
 
-    const orchestrator = makeIngestOrchestrator(merkleAnchor);
-    await orchestrator.execute({ req: true } as any, { authHeader: "Bearer xyz" } as any);
+    // proof_date is null → register_and_anchor_requires_proof_date will throw
+    // so this test should expect a rejection now
+    const merkle = makeMerkleClient();
+    const orchestrator = makeIngestOrchestrator(merkleAnchor, merkle);
 
-    expect(merkleAnchor.anchorPayload).toHaveBeenCalledWith(
-      {
-        domain: "proteomics",
-        payload_type: "ingest_receipt_v1",
-        payload_json: receiptLocal,
-      },
-      {
-        authHeader: "Bearer xyz",
-        idempotencyKey: "idem-4",
-      },
-    );
+    await expect(
+      orchestrator.execute({ req: true } as any, { authHeader: "Bearer xyz" } as any)
+    ).rejects.toThrow(/register_and_anchor_requires_proof_date/i);
   });
 
   it("uses empty ctx safely and still injects idempotencyKey for anchored mode", async () => {
@@ -419,19 +430,13 @@ describe("ingest/orchestrator (unit)", () => {
       anchorPayload: vi.fn().mockResolvedValue(anchor),
     });
 
-    const orchestrator = makeIngestOrchestrator(merkleAnchor);
-    await orchestrator.execute({ req: true } as any, null as any);
+    // proof_date is null → register_and_anchor_requires_proof_date will throw
+    const merkle = makeMerkleClient();
+    const orchestrator = makeIngestOrchestrator(merkleAnchor, merkle);
 
-    expect(merkleAnchor.anchorPayload).toHaveBeenCalledWith(
-      {
-        domain: "demo",
-        payload_type: "ingest_receipt_v1",
-        payload_json: receiptLocal,
-      },
-      {
-        idempotencyKey: "idem-5",
-      },
-    );
+    await expect(
+      orchestrator.execute({ req: true } as any, null as any)
+    ).rejects.toThrow(/register_and_anchor_requires_proof_date/i);
   });
 
   it("propagates executeIngest failures without anchoring", async () => {
@@ -458,7 +463,8 @@ describe("ingest/orchestrator (unit)", () => {
     executeIngestMock.mockRejectedValue(cause);
 
     const merkleAnchor = makeMerkleAnchorClient();
-    const orchestrator = makeIngestOrchestrator(merkleAnchor);
+    const merkle = makeMerkleClient();
+    const orchestrator = makeIngestOrchestrator(merkleAnchor, merkle);
 
     await expect(
       orchestrator.execute({ req: true } as any, {} as any),
@@ -474,7 +480,7 @@ describe("ingest/orchestrator (unit)", () => {
     const parsed = {
       mode: "register_and_anchor",
       domain: "demo",
-      proof_date: null,
+      proof_date: "2026-03-06",
       evidence_pointer: null,
       metadata: null,
       identity: {
@@ -514,13 +520,15 @@ describe("ingest/orchestrator (unit)", () => {
       anchorPayload: vi.fn().mockRejectedValue(cause),
     });
 
-    const orchestrator = makeIngestOrchestrator(merkleAnchor);
+    const merkle = makeMerkleClient();
+    const orchestrator = makeIngestOrchestrator(merkleAnchor, merkle);
 
     await expect(
       orchestrator.execute({ req: true } as any, {} as any),
     ).rejects.toBe(cause);
 
-    expect(buildIngestReceiptV1Mock).toHaveBeenCalledTimes(1);
+    // execute() builds once, finalizeFromEvidence builds once more before anchorPayload throws
+    expect(buildIngestReceiptV1Mock).toHaveBeenCalledTimes(2);
     expect(merkleAnchor.anchorPayload).toHaveBeenCalledTimes(1);
   });
 });

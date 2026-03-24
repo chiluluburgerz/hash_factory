@@ -242,7 +242,7 @@ describe("ingest/verifier (unit)", () => {
       verifyIngestFileSetAgainstReceiptOrBundle({
         root_dir: "/tmp/data",
       }),
-    ).rejects.toThrow(/requires receipt or bundle/i);
+    ).rejects.toThrow("verify_requires_receipt_or_bundle");
   });
 
   it("verifyIngestFileSetAgainstReceiptOrBundle verifies against receipt fields", async () => {

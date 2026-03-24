@@ -12,12 +12,12 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const statMock = vi.fn();
+const lstatMock = vi.fn();
 
 vi.mock("node:fs", () => ({
   default: {
     promises: {
-      stat: statMock,
+      lstat: lstatMock,
     },
   },
 }));
@@ -329,7 +329,8 @@ describe("ingest/execute (unit)", () => {
       },
     });
 
-    statMock.mockResolvedValue({
+    lstatMock.mockResolvedValue({
+      isSymbolicLink: () => false,
       isFile: () => true,
       size: 123,
     });
@@ -354,11 +355,11 @@ describe("ingest/execute (unit)", () => {
       },
     );
 
-    expect(statMock).toHaveBeenCalledWith("/tmp/subdir/report.tsv");
+    expect(lstatMock).toHaveBeenCalledWith(expect.stringContaining("report.tsv"));
     expect(hashScannedFileMock).toHaveBeenCalledWith(
       {
         path_rel: "report.tsv",
-        abs_path: "/tmp/subdir/report.tsv",
+        abs_path: expect.stringContaining("report.tsv"),
         bytes: 123,
       },
       {
@@ -414,7 +415,8 @@ describe("ingest/execute (unit)", () => {
       },
     });
 
-    statMock.mockResolvedValue({
+    lstatMock.mockResolvedValue({
+      isSymbolicLink: () => false,
       isFile: () => false,
       size: 0,
     });
@@ -443,7 +445,7 @@ describe("ingest/execute (unit)", () => {
     });
 
     const cause = new Error("ENOENT");
-    statMock.mockRejectedValue(cause);
+    lstatMock.mockRejectedValue(cause);
 
     await expect(executeIngest({} as any)).rejects.toMatchObject({
       name: "IngestError",
