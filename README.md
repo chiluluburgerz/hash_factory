@@ -5,6 +5,10 @@ Web2-to-Web3 ramp into Vera Anchor, which is a Hedera-native platform for verifi
 Researchers and operators use Hash Factory to generate deterministic cryptographic evidence of dataset integrity, anchor that evidence to the Hedera Consensus Service (HCS), and receive HTS NFT certificates as tamper-evident proof of ownership and version state.
 
 **Live demo:** [hf.veraanchor.com](https://hf.veraanchor.com)
+
+NOTE: The live demo has been moved to hfhackathon.veraanchor.com as of 04/23/2026 to facilitate Vera Anchor Hash Factory public release.
+    The exact deployment submitted on 03/23/2026 for the Hedera Hello Apex Hackathon is available at hfhackathon.veraanchor.com
+
 **Demo video:** [Watch on YouTube](https://www.youtube.com/watch?v=HWb58sL3ryM)
 **npm package:** [npmjs.com/package/hf-local](https://www.npmjs.com/package/hf-local)
 
@@ -37,6 +41,12 @@ The HF API is containerized (Docker, Node 20 Alpine) and deployed behind a Caddy
 **Live deployment:**
 - UI: [hf.veraanchor.com](https://hf.veraanchor.com)
 - API: [hfapi.veraanchor.com](https://hfapi.veraanchor.com)
+
+- NOTE: The live demo has been moved to hfhackathon.veraanchor.com as of 04/23/2026 to facilitate Vera Anchor Hash Factory public release.
+    The exact deployment submitted on 03/23/2026 for the Hedera Hello Apex Hackathon is available at hfhackathon.veraanchor.com
+- NOTE: The live demo API has been moved to https://hfdemo.veraanchor.com. This is the exact deployment submitted on 03/23/2026. 
+- NOTE: Judge API Keys were seeded with a one month expiry due to the original judging period. These keys expired on 04/23/2026. If new keys are needed, please     email contact@veraanchor.com, and keys will be promptly provided once again.  
+
 
 ---
 
